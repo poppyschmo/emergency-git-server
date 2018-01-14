@@ -163,26 +163,43 @@ two environment variables::
    /Documentation/git-http-backend.txt
 
 """
-
 # Author: Jane Soko
 # License: Apache License 2.0
 # Portions derived from Python modules may apply other terms.
 # See <https://docs.python.org/3.5/license.html> for details.
 #
-# TODO offer command-line options in addition to environment variables
-# TODO have FIRST_CHILD_OK be on by default
+# TODO All HTTPStatus codes are naively assigned and largely misapplied. Use
+# official IANA RFC when revising.
 # TODO clarify path-translation behavior via unit tests, then decouple
+# TODO feature: offer command-line options in addition to environment variables
+# TODO feature: have FIRST_CHILD_OK be on by default
 
-from http import HTTPStatus
-from http.server import CGIHTTPRequestHandler, HTTPServer, _url_collapse_path
-from subprocess import (check_output, list2cmdline, Popen,
-                        PIPE, CalledProcessError)
+from __future__ import print_function
+from __future__ import unicode_literals
+from __future__ import division
+from __future__ import absolute_import
+
+import sys
 import copy
 import os
 import re
 import select
-import sys
-import urllib.parse
+
+from subprocess import (check_output, list2cmdline, Popen,
+                        PIPE, CalledProcessError)
+
+if sys.version_info < (3, 0):
+    import httplib as HTTPStatus
+    import urlparse
+    from future_builtins import filter
+    from CGIHTTPServer import CGIHTTPRequestHandler, _url_collapse_path
+    from BaseHTTPServer import HTTPServer
+else:
+    import urllib.parse as urlparse
+    from http import HTTPStatus
+    from http.server import (CGIHTTPRequestHandler, HTTPServer,
+                             _url_collapse_path)
+
 
 # Real, local path exposed by server as '/'. Full dereferencing with
 # os.path.realpath() might not be desirable in some situations.
@@ -250,7 +267,7 @@ def get_auth_dict():
     return outdict
 
 
-class CtxServer(HTTPServer):
+class CtxServer(HTTPServer, object):
     """Use standard per-request wrapping rather than wrap the bound
     listen socket as an instance attribute prior to starting the loop.
     The latter approach actually seems to work just as well, but this
@@ -266,8 +283,8 @@ class CtxServer(HTTPServer):
     """
     def __init__(self, server_address, RequestHandlerClass, context=None):
         self.ssl_context = context
-        super().__init__(server_address, RequestHandlerClass,
-                         bind_and_activate=True)
+        super(CtxServer, self).__init__(server_address, RequestHandlerClass,
+                                        bind_and_activate=True)
 
     def _handle_request_noblock(self):
         """No idea how this really works. See superclass docstring.
@@ -302,7 +319,7 @@ class CtxServer(HTTPServer):
             self.shutdown_request(request)
 
 
-class HTTPBackendHandler(CGIHTTPRequestHandler):
+class HTTPBackendHandler(CGIHTTPRequestHandler, object):
     """The included CGI handler from the standard library needs a bit of
     massaging to play nice with git-http-backend(1). See the main module's
     __doc__ for details.
@@ -325,14 +342,17 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
             return
         import inspect
         ctx = inspect.stack()[1]
-        out = ["%s()" % ctx.function, " - "]
+        if hasattr(ctx, "function"):
+            out = ["%s()" % ctx.function, " - "]
+        else:
+            out = ["%s()" % ctx[3], " - "]
         #
         if all(c in fmt for c in "{}"):
             out.append(fmt.format(*msg))
         elif any("%%%c" % c in fmt for c in "srcdiouxfFgGXeEa#0- +"):
             out.append(fmt % msg)
         elif fmt:
-            out.append(" ".join((fmt, *msg)))
+            out.append(" ".join((fmt,) + msg))
         else:
             out.pop()
         if kwargs.get("locals"):
@@ -505,7 +525,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
                       collapsed_path=collapsed_path)
             if msg is not None:
                 self.send_error(HTTPStatus.FORBIDDEN, msg)
-                raise ConnectionAbortedError(msg)
+                # Raise exception so msg is prominent in server-side logs
+                raise ValueError(msg)  # no ConnectionError in 2.7
             elif mutate_path is True:
                 # Nest everything by a level (break out of DOCROOT)
                 self.docroot, git_root = os.path.split(self.docroot)
@@ -567,7 +588,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
             thisdir = DOCROOT
             self.dlog("translate_path - call to os.getcwd() failed")
         os.chdir(self.docroot)
-        outpath = super().translate_path(path)
+        outpath = super(HTTPBackendHandler, self).translate_path(path)
         os.chdir(thisdir)
         return outpath
 
@@ -647,7 +668,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         Otherwise, it responds with a 301 MOVED_PERMANENTLY.
         """
         if not self.auth_dict:
-            return super().send_head()
+            return super(HTTPBackendHandler, self).send_head()
         #
         # self.dlog("send_head - auth_dict", **self.auth_dict)
         collapsed_path = _url_collapse_path(self.path)
@@ -663,7 +684,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         privaterepo = realm_info.get('privaterepo', False)
         if (is_protected is False or privaterepo is False and
                 "service=git-receive-pack" not in collapsed_path):
-            return super().send_head()
+            return super(HTTPBackendHandler, self).send_head()
         description = realm_info.get('description', "Basic auth requested")
         # XXX - this option is currently bunk, although it does trigger the
         # exporting of REMOTE_USER below, which the git exes seem to ignore.
@@ -734,7 +755,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
                                              authorization[1])):
                         if realaccount:
                             os.environ.update(REMOTE_USER=authorization[0])
-                        return super().send_head()
+                        return super(HTTPBackendHandler, self).send_head()
                     else:
                         self.send_error(HTTPStatus.FORBIDDEN,
                                         "Problem authenticating "
@@ -836,7 +857,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         # Env vars only contain strings, so a simple ``env = dict(os.environ)``
         # would do the same thing, no? Whatever, go with upstream...
         env = copy.deepcopy(os.environ)
-        uqrest = urllib.parse.unquote(rest)
+        uqrest = urlparse.unquote(rest)
         #
         # As required by git-http-backend(1); These never change.
         env["GIT_HTTP_EXPORT_ALL"] = ""
@@ -877,8 +898,13 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         env['SERVER_PORT'] = str(self.server.server_port)
         env['REQUEST_METHOD'] = self.command
         env['REMOTE_ADDR'] = self.client_address[0]
-        env['CONTENT_TYPE'] = self.headers.get(
-            'content-type', self.headers.get_content_type())
+        if hasattr(self.headers, "get_content_type"):
+            env['CONTENT_TYPE'] = self.headers.get(
+                'content-type', self.headers.get_content_type()
+            )
+        else:
+            env['CONTENT_TYPE'] = (self.headers.typeheader or
+                                   self.headers.type)
         length = self.headers.get('content-length')
         if length:
             env['CONTENT_LENGTH'] = length
@@ -895,7 +921,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         ua = self.headers.get('user-agent')
         if ua:
             env['HTTP_USER_AGENT'] = ua
-        co = filter(None, self.headers.get_all('cookie', []))
+        if hasattr(self.headers, "get_all"):
+            co = filter(None, self.headers.get_all('cookie', []))
+        else:
+            co = filter(None, self.headers.getheaders('cookie'))
         cookie_str = ', '.join(co)
         if cookie_str:
             env['HTTP_COOKIE'] = cookie_str
@@ -918,7 +947,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
                              pre in 'query path git remote'.upper().split())))
         #
         self.send_response(HTTPStatus.OK, "Script output follows")
-        self.flush_headers()
+        if hasattr(self, "flush_headers"):
+            self.flush_headers()
         # decoded_query = query.replace('+', ' ')
         cmdline = [gitprg_path]
         if query and '=' not in query:
@@ -944,7 +974,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
             self.log_error("'Content-Length' already present!: %r", hdr)
         length = len(payload)
         self.send_header("Content-Length", length)
-        self.flush_headers()
+        if hasattr(self, "flush_headers"):
+            self.flush_headers()
         #
         self.wfile.write(stdout)
         if stderr:
@@ -1044,12 +1075,12 @@ def register_signals(server, quitters, keepers=None):
                    "SIG" + s.upper() for s in keepers]
     else:
         keepers = ()
-    signames = set((*quitters, *keepers))
+    # This syntax is forbidden in Python 2.7: ``set((*quitters, *keepers))``
+    signames = set(quitters) | set(keepers)
     import signal
-    signals = (getattr(signal, sig, None) for sig in signames)
     # Can also ``filter(None, Iterator)`` to get rid of falsey items
-    numxsig = {sig.value: sig.name for sig in signals if sig}
-    del signals
+    numxsig = {getattr(signal, sig, None): sig for sig in signames if
+               sig in dir(signal)}
 
     def handle_stay_signal(signo, frame):
         print("\nReceived {!r} from controlling terminal; "
@@ -1061,8 +1092,13 @@ def register_signals(server, quitters, keepers=None):
         # This just calls ``socket.close()`` (rather than shutdown)
         server.server_close()
         msg = "\nReceived %r, {} server, quitting..." % numxsig[signo]
-        print(msg.format("successfully closed" if server.socket._closed else
-                         "FAILED TO CLOSE"), file=sys.stderr)
+        if hasattr(server.socket, "_closed"):
+            print(msg.format("successfully closed" if server.socket._closed
+                             else "FAILED TO CLOSE"), file=sys.stderr)
+        else:
+            print(msg.format("successfully closed" if "closedsocket" in
+                             repr(server.socket._sock) else "FAILED TO CLOSE"),
+                  file=sys.stderr)
         sys.exit(0)
 
     for num, name in numxsig.items():
@@ -1105,11 +1141,9 @@ def serve(server_class, name="Git services", context=None):
 
 def main():
     #
-    min_version = (3, 5)
-    if sys.version_info < min_version:
-        print("Python version %r.%r or greater required." % min_version,
+    if sys.version_info < (3, 5) and list(sys.version_info)[:2] != [2, 7]:
+        print("WARNING: untested on Python versions < 3.5, except for 2.7",
               file=sys.stderr)
-        return 1
     #
     if len(sys.argv) > 1 and sys.argv[1].lstrip("-") in ("help", "h"):
         print("\n".join(l[4:] for l in
