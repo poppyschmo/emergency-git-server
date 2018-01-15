@@ -10,7 +10,7 @@ setup(
     name="emergency_git_server",
     author="Jane Soko",
     author_email="boynamedjane@misled.ml",
-    version="0.0.2",
+    version="0.0.3",
     url="https://github.com/poppyschmo/emergency-git-server",
     description="A minimal Git HTTP server",
     long_description=long_description,
@@ -31,7 +31,7 @@ setup(
     install_requires=[],
     packages=[],
     py_modules=["emergency_git_server"],
-    python_requires=", ".join([">=2.7"] + ["!=3.%d.*" % d for d in range(4)]),
+    python_requires=", ".join([">=2.7"] + ["!=3.%d.*" % d for d in range(5)]),
     entry_points={
         "console_scripts": ["emergency-git-server = emergency_git_server:main"]
     }
