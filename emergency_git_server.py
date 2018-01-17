@@ -456,7 +456,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 else:
                     self.path = collapsed_path = (git_root.rstrip("/") +
                                                   "/" + tail.lstrip("/"))
-        self.dlog("is_cgi - top", git_root=git_root, ns=ns, tail=tail)
+        self.dlog("enter", git_root=git_root, ns=ns, tail=tail)
         if ns:
             nsrepo = os.path.join(git_root.lstrip("/"), tail.partition("/")[0])
             nspath = os.path.join(self.docroot, nsrepo)
@@ -466,7 +466,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             except CalledProcessError as e:
                 self.log_error("{!r}".format(e))
             else:
-                self.dlog("is_cgi: %s/HEAD:" % nsrepo, nshead=nshead.decode())
+                self.dlog("%s/HEAD:" % nsrepo, nshead=nshead.decode())
         #
         # Disqualify GET requests for static resources in ``$GIT_DIR/objects``.
         if self.get_RE.match(collapsed_path):
@@ -527,7 +527,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     override, export "_FIRST_CHILD_OK=1";
                     see usage; hit Ctrl-C (SIGINT) to exit
                     """
-            self.dlog("is_cgi - git_root missing",
+            self.dlog("git_root missing",
                       gr_test=gr_test,
                       tail=tail,
                       mutate_path=mutate_path,
@@ -562,7 +562,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             uri = os.path.join(
                 self.docroot,
                 collapsed_path.split('/info/refs?service=')[0].strip('/'))
-            if "FileExistsError" not in globals():  # 2.7
+            if "FileExistsError" not in dir(__builtins__):  # 2.7
                 FileExistsError = OSError
             try:
                 # Assume mode is set according to umask
@@ -578,10 +578,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 except CalledProcessError as e:
                     self.log_error('%r', e)
                 else:
-                    self.dlog('is_cgi - created new repo', cp=cp)
-        self.dlog("is_cgi:",
-                  **{"self.raw_requestline": self.raw_requestline,
-                     "collapsed_path": collapsed_path,
+                    self.dlog('created new repo', cp=cp)
+        self.dlog("leave",
+                  **{"collapsed_path": collapsed_path,
                      "git_root": self.find_repo(collapsed_path)[0],
                      "cgi_cand": cgi_cand,
                      "self.repo_info": self.repo_info,
@@ -600,7 +599,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             thisdir = os.getcwd()
         except FileNotFoundError:
             thisdir = DOCROOT
-            self.dlog("translate_path - call to os.getcwd() failed")
+            self.dlog("call to os.getcwd() failed")
         os.chdir(self.docroot)
         outpath = super(HTTPBackendHandler, self).translate_path(path)
         os.chdir(thisdir)
@@ -681,7 +680,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         html directory listing is to be generated and returned.
         Otherwise, it responds with a 301 MOVED_PERMANENTLY.
         """
-        print("\n>>>>>>>>>> HANDLING NEW REQUEST <<<<<<<<<<", file=sys.stderr)
+        print("\n<<<<<<<<<<: %r" % self.raw_requestline, file=sys.stderr)
         if self.cipher:
             self.dlog("SSL info", cipher=self.cipher)
         if not self.auth_dict:
@@ -743,7 +742,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         authorization = self.headers.get("authorization")
         #
         if authorization:
-            self.dlog("send_head - auth string sent: %r" % authorization)
+            self.dlog("auth string sent: %r" % authorization)
             authorization = authorization.split()
             if len(authorization) == 2:
                 import base64
@@ -763,7 +762,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     pass
                 else:
                     authorization = authorization.split(':')
-                    self.dlog("send_head - processed auth: "
+                    self.dlog("processed auth: "
                               "{!r}".format(authorization))
                     if (len(authorization) == 2 and
                             authorization[0] in secdict and
@@ -845,7 +844,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         repo_uri = root + '/' + repo
         repo_abs = self.translate_path(repo_uri)
         #
-        self.dlog("run_cgi - vars", **dict(
+        self.dlog("enter", **dict(
             item for item in locals().items() if item[0] in
             ('root', 'rest') or item[0].startswith('repo')))
         #
@@ -864,7 +863,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     HTTPStatus.PRECONDITION_FAILED,
                     "CGI script is not executable (%r)" % plumbing_cmd)
                 return
-            self.dlog("run_cgi - git-plumbing command:", path=plumbing_cmd)
+            self.dlog("git-plumbing command", path=plumbing_cmd)
         else:
             self.send_error(HTTPStatus.NOT_FOUND,
                             "- CGI Script '%s' not found." % repo_abs)
@@ -945,7 +944,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if cookie_str:
             env['HTTP_COOKIE'] = cookie_str
         #
-        self.dlog("self.headers:", **self.headers)
+        self.dlog("headers", **self.headers)
         #
         # XXX Other HTTP_* headers
         # Since we're setting the env in the parent, provide empty
@@ -956,7 +955,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             env.setdefault(k, "")
         #
         # Env vars required by ``git-http-backend`` and/or rfc3875
-        self.dlog("run_cgi - envvars",
+        self.dlog("envvars",
                   **dict(item for item in env.items() if
                          item[0] in rfcvars or
                          any(item[0].startswith(pre + '_') for
