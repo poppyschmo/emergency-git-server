@@ -308,6 +308,9 @@ class CtxServer(HTTPServer, object):
                             return
                         else:
                             raise
+                    else:
+                        if DEBUG and self.RequestHandlerClass.cipher is None:
+                            self.RequestHandlerClass.cipher = request.cipher()
                 self.process_request(request, client_address)
             except Exception:
                 self.handle_error(request, client_address)
@@ -317,6 +320,12 @@ class CtxServer(HTTPServer, object):
                 raise
         else:
             self.shutdown_request(request)
+        #
+        # XXX unsure how safe this is. Unlike the py3 version, this can't be
+        # called between selector poll intervals (when fd is busy).
+        if (not hasattr(HTTPServer, "service_actions") and
+                hasattr(self, "service_actions")):
+            self.service_actions()
 
 
 class HTTPBackendHandler(CGIHTTPRequestHandler, object):
@@ -326,6 +335,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
     """
 
     has_openssl = None
+    cipher = None
     git_exec_path = get_libexec_dir()
     auth_dict = get_auth_dict()
     docroot = DOCROOT
@@ -552,11 +562,15 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             uri = os.path.join(
                 self.docroot,
                 collapsed_path.split('/info/refs?service=')[0].strip('/'))
+            if "FileExistsError" not in globals():  # 2.7
+                FileExistsError = OSError
             try:
                 # Assume mode is set according to umask
                 os.makedirs(uri)
-            except FileExistsError:
-                pass
+            except FileExistsError as err:
+                if FileExistsError == OSError:
+                    if err.errno != os.errno.EEXIST:
+                        raise
             # Target repo be empty
             if len(os.listdir(uri)) == 0:
                 try:
@@ -667,10 +681,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         html directory listing is to be generated and returned.
         Otherwise, it responds with a 301 MOVED_PERMANENTLY.
         """
+        print("\n>>>>>>>>>> HANDLING NEW REQUEST <<<<<<<<<<", file=sys.stderr)
+        if self.cipher:
+            self.dlog("SSL info", cipher=self.cipher)
         if not self.auth_dict:
             return super(HTTPBackendHandler, self).send_head()
         #
-        # self.dlog("send_head - auth_dict", **self.auth_dict)
         collapsed_path = _url_collapse_path(self.path)
         is_protected = False
         # XXX iter var name too long, need below
@@ -1006,7 +1022,12 @@ def validate_logpath(inpath=None, create=False, maxsize=2):
             return None
         # If attempting to support Windows, assume Python version >= 3.5
         if os.path.getsize(outpath) > 2**20 * maxsize:
-            os.truncate(outpath, 0)
+            try:
+                os.truncate(outpath, 0)
+            except AttributeError:
+                # Surely there's some simpler way to do this
+                with open(outpath, "w") as f:
+                    os.ftruncate(f.fileno(), 0)
     return outpath
 
 
@@ -1153,20 +1174,33 @@ def main():
     #
     logfile = validate_logpath(LOGFILE, create=True, maxsize=0)
     #
-    if logfile is not None:
-
-        class AsRequested(CtxServer):
-            def service_actions(self):
-                sys.stderr.flush()
-                sys.stdout.flush()
-
-        from contextlib import redirect_stderr, redirect_stdout
-        with open(logfile, 'a') as f:
-            with redirect_stderr(f):
-                with redirect_stdout(sys.stderr):
-                    serve(AsRequested, context=set_ssl_context())
-    else:
+    if logfile is None:
         serve(CtxServer, context=set_ssl_context())
+        return
+
+    class AsRequested(CtxServer):
+        def service_actions(self):
+            sys.stderr.flush()
+            sys.stdout.flush()
+
+    with open(logfile, 'a') as f:
+        try:
+            from contextlib import redirect_stderr, redirect_stdout
+        except ImportError:
+            try:
+                _stderr = sys.stderr
+                sys.stderr = f
+                serve(AsRequested, context=set_ssl_context())
+            except Exception:
+                raise
+            finally:
+                sys.stderr = _stderr
+        else:
+            # Actually, probably shouldn't redirect stdout, but some inherited
+            # methods like ``SocketServer.BaseServer.handle_error`` don't print
+            # to stderr.
+            with redirect_stderr(f), redirect_stdout(sys.stderr):
+                serve(AsRequested, context=set_ssl_context())
 
 
 if __name__ == "__main__":
