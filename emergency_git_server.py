@@ -321,8 +321,9 @@ class CtxServer(HTTPServer, object):
         else:
             self.shutdown_request(request)
         #
-        # XXX unsure how safe this is. Unlike the py3 version, this can't be
-        # called between selector poll intervals (when fd is busy).
+        # XXX workaround for the lack of a ``service_actions()`` hook in 2.7's
+        # ``serve_forever`` loop. Unsure how safe this is. Unlike in py3, this
+        # doesn't run between selector poll intervals (when fd is busy).
         if (not hasattr(HTTPServer, "service_actions") and
                 hasattr(self, "service_actions")):
             self.service_actions()
@@ -562,15 +563,16 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             uri = os.path.join(
                 self.docroot,
                 collapsed_path.split('/info/refs?service=')[0].strip('/'))
-            if "FileExistsError" not in dir(__builtins__):  # 2.7
-                FileExistsError = OSError
             try:
                 # Assume mode is set according to umask
                 os.makedirs(uri)
-            except FileExistsError as err:
-                if FileExistsError == OSError:
-                    if err.errno != os.errno.EEXIST:
+            except Exception as err:
+                if hasattr(__builtins__, "FileExistsError"):
+                    if not isinstance(err, FileExistsError):
                         raise
+                elif (not isinstance(err, OSError) or
+                      err.errno != os.errno.EEXIST):  # 2.7
+                    raise
             # Target repo be empty
             if len(os.listdir(uri)) == 0:
                 try:

@@ -10,7 +10,7 @@ setup(
     name="emergency_git_server",
     author="Jane Soko",
     author_email="boynamedjane@misled.ml",
-    version="0.0.5",
+    version="0.0.6",
     url="https://github.com/poppyschmo/emergency-git-server",
     description="A minimal Git HTTP server",
     long_description=long_description,
