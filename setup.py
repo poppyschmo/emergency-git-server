@@ -10,7 +10,7 @@ setup(
     name="emergency_git_server",
     author="Jane Soko",
     author_email="boynamedjane@misled.ml",
-    version="0.0.6",
+    version="0.0.7",
     url="https://github.com/poppyschmo/emergency-git-server",
     description="A minimal Git HTTP server",
     long_description=long_description,
@@ -25,6 +25,7 @@ setup(
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
         "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
         "Topic :: Software Development :: Version Control :: Git"
     ],

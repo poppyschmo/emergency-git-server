@@ -1,5 +1,5 @@
 #!/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 import pytest
 
@@ -23,6 +23,7 @@ def make_temptree(tmpdir):
         └── 3
     """
     import os
+    this_dir = os.getcwd()
     os.chdir(tmpdir)
     os.makedirs("a/b/c")
 
@@ -35,7 +36,7 @@ def make_temptree(tmpdir):
         with open(path, "w"):
             pass
         assert os.path.exists(path)
-
+    os.chdir(this_dir)
     return tmpdir
 
 
@@ -45,29 +46,12 @@ def bhstub():
 
     class BhStub(HTTPBackendHandler):
         def __init__(self):
+            import os
+            if os.sys.version_info >= (3, 7):
+                self.directory = os.getcwd()
             self.docroot = None
 
     return BhStub()
-
-
-@pytest.fixture
-def shstub():
-    from http.server import SimpleHTTPRequestHandler
-
-    class ShStub(SimpleHTTPRequestHandler):
-        def __init__(self):
-            pass
-
-    return ShStub()
-
-
-@pytest.fixture(params=[bhstub, shstub])
-def hhstub(make_temptree, bhstub, shstub, request):
-    if isinstance(bhstub, request.param.__class__):
-        bhstub.docroot = make_temptree
-        return bhstub
-    else:
-        return shstub
 
 
 git_root_name = "repos"
@@ -155,23 +139,31 @@ def test_dlog(bhstub, capsys, monkeypatch):
     monkeypatch.setattr(spam, "log_date_time_string", mock_ldts)
     spam.f()
     output = capsys.readouterr()[1].rstrip()
-    assert output == (fmtstr.replace("test_dlog", "f") % (" - auto kwargs:" +
-                      fkv(**{"self.foo": 0, "self.bar": 1, "baz": 2})))
+    from textwrap import dedent
+    assert output == dedent("""
+        localhost - - [1/Jan/1970 00:00:00] f() - auto kwargs:
+          self.foo: 0
+          self.bar: 1
+          baz:      2
+    """).strip()
 
 
-def test_translate_path(hhstub):
-    """ This mostly tests the base method and ``posixpath.normpath``,
-    which it calls. Both versions should behave identically, so long as
-    the CWD is docroot.
+def test_translate_path(bhstub, make_temptree):
+    """Confirm some facts about the base-method.
     """
     import os
     from functools import partial
 
-    hh = hhstub
-    is_bh = hasattr(hh, "docroot")
+    hh = bhstub
+    hh.docroot = make_temptree
+    # We're not at doc root
+    assert os.getcwd() != hh.docroot
+    if os.sys.version_info >= (3, 7):
+        # RHS is py._path.local.LocalPath but its eq works with strings
+        assert hh.directory != hh.docroot
 
     # This is the tmpdir standing in for /var/www/html
-    orig_dr = getattr(hh, "docroot", os.getcwd())
+    orig_dr = getattr(hh, "docroot")
     drplus = partial(os.path.join, orig_dr)
 
     # Paths can be real or fake
@@ -191,13 +183,16 @@ def test_translate_path(hhstub):
     path = "/foo/bar?baz=spam"
     assert hh.translate_path(path) == drplus("foo/bar")
 
+    # We're *still* not at doc root and .directory hasn't changed
+    assert os.getcwd() != orig_dr and orig_dr == hh.docroot
+    if os.sys.version_info >= (3, 7):
+        assert hh.directory != orig_dr
+
     # From glancing at the parent method, it might appear that overlapping
     # components are merged in a "union" type operation, but the next few
     # stanzas show otherwise
     hh.docroot = drplus("a/b")  # <- *Rewrite* docroot but don't cd
     drplus = partial(os.path.join, hh.docroot)
-    if not is_bh:
-        os.chdir(hh.docroot)
 
     # Here ``a`` is the parent of docroot, but a child ``a`` is appended
     assert drplus("a/b/1").endswith("a/b/a/b/1")
@@ -206,7 +201,7 @@ def test_translate_path(hhstub):
     assert drplus("b/1").endswith("b/b/1")
     assert hh.translate_path("b/1") == drplus("b/1")
 
-    # ``os.curdir`` (single dots) are always dropped
+    # ``os.curdir`` (single dots) are always dropped (posixpath.normpath)
     assert hh.translate_path("./foo/./") == drplus("foo/")
     assert hh.translate_path("/./foo") == drplus("foo")
     assert hh.translate_path(".//./foo/.///bar") == drplus("foo/bar")
@@ -221,11 +216,10 @@ def test_translate_path(hhstub):
     assert hh.translate_path("a/b/..") == drplus("a")
 
     # All components of docroot must exist
-    if is_bh:
-        hh.docroot = os.path.join(orig_dr, "fake")  # <- *Rewrite docroot*
-        drplus = partial(os.path.join, hh.docroot)
-        with pytest.raises(FileNotFoundError):
-            assert hh.translate_path("foo") == drplus("foo")
+    hh.docroot = os.path.join(orig_dr, "fake")  # <- *Rewrite docroot*
+    drplus = partial(os.path.join, hh.docroot)
+    with pytest.raises(FileNotFoundError):
+        assert hh.translate_path("foo") == drplus("foo")
 
 
 class TestFindRepoBasic:
@@ -324,7 +318,7 @@ def pytest_generate_tests(metafunc):
 @pytest.fixture
 def ind_cwds(request):
     i = request.param
-    dr, gr, repo_names = request.getfuncargvalue("make_gitroot")
+    dr, gr, repo_names = request.getfixturevalue("make_gitroot")
     if i >= 0 and i < len(repo_names):
         import os
         return os.path.join(gr, repo_names[i])

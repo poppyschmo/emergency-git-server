@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 r"""Usage::
 
     python3 emergency_git_server.py [DOCROOT]
@@ -603,7 +603,13 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             thisdir = DOCROOT
             self.dlog("call to os.getcwd() failed")
         os.chdir(self.docroot)
+        if hasattr(self, "directory"):
+            orig_directory = self.directory
+            self.directory = self.docroot
+            assert sys.version_info >= (3, 7)
         outpath = super(HTTPBackendHandler, self).translate_path(path)
+        if hasattr(self, "directory"):
+            self.directory = orig_directory
         os.chdir(thisdir)
         return outpath
 
@@ -1192,8 +1198,6 @@ def main():
                 _stderr = sys.stderr
                 sys.stderr = f
                 serve(AsRequested, context=set_ssl_context())
-            except Exception:
-                raise
             finally:
                 sys.stderr = _stderr
         else:
