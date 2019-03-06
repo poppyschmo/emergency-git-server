@@ -26,12 +26,7 @@ except ImportError:
 
 bw_script = os.path.join(os.path.dirname(__file__), "bw.sh")
 
-if os.getenv("TRAVIS"):
-    spawncmd = "env -i - USER=travis HOSTNAME=/home/travis bash %s"
-    is_travis = True
-else:
-    spawncmd = "bash {} %s".format(bw_script)
-    is_travis = False
+is_travis = os.getenv("TRAVIS")
 
 
 certconf_source = """
@@ -99,6 +94,7 @@ def server(request, tmpdir_factory):
     name = "srv-{}".format(name)
     docroot = tmpdir_factory.mktemp(name, numbered=True)
     docroot.chdir()
+    cachedir = request.config.cache.makedir("gitsrv")
     bw_path = docroot.join("bw.sh")
     server_path = docroot.join("emergency_git_server.py").strpath
     shutil.copyfile(emergency_git_server.__file__, server_path)
@@ -108,11 +104,28 @@ def server(request, tmpdir_factory):
     shutil.copyfile(bw_script, bw_path)
     bw_path.chmod(0o700)
 
-    if not os.getenv("USER"):
+    missing_envvars = {}
+    misus = os.getenv("USER")
+    misho = os.getenv("HOME")
+    miste = os.getenv("TERM")
+    mishn = os.getenv("HOSTNAME")
+    # TOX/TRAVIS need these
+    if not misus:
         from _pytest.tmpdir import get_user
-        env_user = get_user()
-    if not os.getenv("HOME"):
-        env_home = "/home/%s" % env_user
+        misus = get_user()
+        missing_envvars.update(USER=misus)
+    if not misho:
+        misho = "/home/%s" % misus
+        missing_envvars.update(HOME=misho)
+    if not miste:
+        miste = "xterm"
+        missing_envvars.update(TERM=miste)
+    if not mishn:
+        if is_travis:
+            mishn = "ci-worker"
+        else:
+            raise RuntimeError("HOSTNAME required in environment")
+        missing_envvars.update(HOSTNAME=mishn)
 
     py_executable = os.getenv("GITSRV_TEST_PYEXE")
     if py_executable:
@@ -129,13 +142,14 @@ def server(request, tmpdir_factory):
         port_pat = re.compile(r"port (\d+)")
 
         def __init__(self):
+            self.missing_envvars = missing_envvars
             self.rootdir = request.config.rootdir
             self.docroot = docroot
+            self.cachedir = cachedir
             self.logfile = docroot.join("server.log")
             self.pickfile = docroot.join("data.pickle")
-            self._certfile = docroot.join("dummycert.pem")
+            self._certfile = cachedir.join("dummycert.pem")
             self._authfile = docroot.join("auth.json")
-            self.openssl_cnf = docroot.join("openssl.cnf")
             self.cmdline = [py_executable, server_path, docroot.strpath]
 
         def dumb_waiter(self, func, maxiter=30, wait_for=0.1):
@@ -209,13 +223,11 @@ def server(request, tmpdir_factory):
             env.update(BWRAP_NOREPO="1")
             if not name:
                 name = repo.basename.rstrip("0123456789") + ".git"
+            cmd = [] if is_travis else [bw_path]
+            cmd += ["git", "clone", "--bare", repo.join(".git").strpath, name]
             try:
-                out = subprocess.check_output(
-                    [bw_path, "git", "clone", "--bare",
-                     repo.join(".git").strpath, name],
-                    stderr=subprocess.PIPE,
-                    cwd=cwd.strpath, env=env
-                )
+                out = subprocess.check_output(cmd, stderr=subprocess.PIPE,
+                                              cwd=cwd.strpath, env=env)
             except subprocess.CalledProcessError as exc:
                 out = exc.output
                 err = exc.stderr
@@ -236,22 +248,30 @@ def server(request, tmpdir_factory):
         def create_cert(self):
             certstr = self._certfile.strpath
             if self._certfile.exists():
-                subprocess.check_call(["openssl", "verify", certstr])
-                return True
+                try:  # Allow self-signed
+                    subprocess.check_call(["openssl", "verify", "-trusted",
+                                           certstr, certstr])
+                except subprocess.CalledProcessError:
+                    self._certfile.remove()
+                else:
+                    return True
 
-            if not self.openssl_cnf.exists():
-                env = os.environ.copy()
-                if not os.getenv("HOME"):  # TOX
-                    env.update(HOME=env_home, USER=env_user)
-                email = subprocess.check_output(["git", "config",
-                                                 "user.email"], env=env)
-                self.openssl_cnf.write(
-                    certconf_source.format(path=certstr, email=email.decode())
+            env = os.environ.copy()
+            if self.missing_envvars:  # TOX
+                env.update(self.missing_envvars)
+
+            openssl_cnf = self.cachedir.join("openssl.cnf")
+            if not openssl_cnf.exists():
+                email = subprocess.check_output(
+                    ["git", "config", "user.email"], env=env
                 )
-            cmdline = ["openssl", "req", "-config",
-                       self.openssl_cnf.strpath,
-                       "-x509", "-days", "1", "-out", certstr]
-            subprocess.check_call(cmdline)
+                openssl_cnf.write(certconf_source.format(path=certstr,
+                                                         email=email.decode()))
+            # Some sites need -newkey algo to be passed
+            cmdline = ["openssl", "req", "-config", openssl_cnf.strpath,
+                       "-x509", "-days", "1", "-newkey", "rsa",
+                       "-out", certstr]
+            subprocess.check_call(cmdline, env=env)
             return True
 
         @property
@@ -267,6 +287,19 @@ def server(request, tmpdir_factory):
                                            secretsfile=secretsfile.strpath)
                 )
             return self._authfile
+
+        @property
+        def pe_child_cmd(self):  # doesn't belong here but whatever
+            if is_travis:
+                assert self.missing_envvars
+                cmd = ("env -i - USER={USER} HOME={HOME} TERM={TERM} "
+                       "HOSTNAME={HOSTNAME} bash --noprofile --norc -i")
+                env = os.environ.copy()
+                env.update(self.missing_envvars)
+                return cmd.format(**env)
+            else:
+                cmd = "bash {} {}"
+                return cmd.format(bw_path, request.config.rootdir.strpath)
 
     s = Server()
     yield s
@@ -288,7 +321,7 @@ def test_basic_errors(server, testdir, create, first, ssl):
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
     server.consume_log(["*Started serving*"])
-    pe = testdir.spawn(spawncmd % testdir.request.config.rootdir.strpath)
+    pe = testdir.spawn(server.pe_child_cmd)
     pe.expect(prompt_re)
     twofer = get_twofer(pe)
     if ssl:
@@ -354,7 +387,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     server.start(**env)
     server.consume_log(["*Started serving*"])
 
-    pe = testdir.spawn(spawncmd % testdir.request.config.rootdir.strpath)
+    pe = testdir.spawn(server.pe_child_cmd)
     twofer = get_twofer(pe)
 
     pe.expect(prompt_re)
@@ -398,7 +431,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
 
     # Develop
     pe.sendline("git checkout -b topic")
-    pe.expect(".*new branch.*topic.*")
+    pe.expect(".*new branch.*topic")
     pe.expect(prompt_re)
     pe.sendline("mkdir src && "
                 "echo '#ifndef NUMS_H\n#define NUMS_H\n' > src/nums.h && "
@@ -406,7 +439,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     pe.expect("1 file changed")
     pe.expect(prompt_re)
     pe.sendline("git push -u origin topic")
-    pe.expect(".*new branch.*topic.*")
+    pe.expect(".*new branch.*topic")
     pe.expect(prompt_re)
     pe.sendline("git checkout master && git merge topic")
     pe.expect("1 file changed")
@@ -498,7 +531,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     server.start(**env)
     server.consume_log(["*Started serving*"])
 
-    pe = testdir.spawn(spawncmd % testdir.request.config.rootdir.strpath)
+    pe = testdir.spawn(server.pe_child_cmd)
     twofer = get_twofer(pe)
     pe.expect(bash_prompt)
 
