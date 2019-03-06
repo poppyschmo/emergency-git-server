@@ -3,7 +3,7 @@ from os import path
 
 here = path.abspath(path.dirname(__file__))
 
-with open(path.join(here, "README.rst"), encoding="utf-8") as f:
+with open(path.join(here, "README.rst")) as f:
     long_description = f.read()
 
 setup(
@@ -32,7 +32,8 @@ setup(
     install_requires=[],
     packages=[],
     py_modules=["emergency_git_server"],
-    python_requires=", ".join([">=2.7"] + ["!=3.%d.*" % d for d in range(5)]),
+
+    python_requires=">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*",
     entry_points={
         "console_scripts": ["emergency-git-server = emergency_git_server:main"]
     }
