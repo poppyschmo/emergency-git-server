@@ -101,7 +101,7 @@ def server(request, tmpdir_factory):
     if request.config.getoption("dump_dlog"):
         server_path = docroot.join("dumper.py").strpath
         shutil.copyfile(dumper.__file__, server_path)
-    shutil.copyfile(bw_script, bw_path)
+    shutil.copyfile(bw_script, bw_path.strpath)
     bw_path.chmod(0o700)
 
     missing_envvars = {}
@@ -223,7 +223,7 @@ def server(request, tmpdir_factory):
             env.update(BWRAP_NOREPO="1")
             if not name:
                 name = repo.basename.rstrip("0123456789") + ".git"
-            cmd = [] if is_travis else [bw_path]
+            cmd = [] if is_travis else [bw_path.strpath]
             cmd += ["git", "clone", "--bare", repo.join(".git").strpath, name]
             try:
                 out = subprocess.check_output(cmd, stderr=subprocess.PIPE,
@@ -299,7 +299,8 @@ def server(request, tmpdir_factory):
                 return cmd.format(**env)
             else:
                 cmd = "bash {} {}"
-                return cmd.format(bw_path, request.config.rootdir.strpath)
+                return cmd.format(bw_path.strpath,
+                                  request.config.rootdir.strpath)
 
     s = Server()
     yield s
