@@ -732,6 +732,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                             self.verify_pass(secdict[authorization[0]],
                                              authorization[1])):
                         if realaccount:
+                            # FIXME don't update this proc's environment
                             os.environ.update(REMOTE_USER=authorization[0])
                         return super(HTTPBackendHandler, self).send_head()
                     else:
@@ -856,11 +857,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         #
         env['QUERY_STRING'] = query
         #
-        # XXX was perviously assumed that, only ``git-receive-pack`` required
+        # XXX was previously assumed only ``git-receive-pack`` required
         # REMOTE_USER, but this might not be true. Not sure whether this is
         # handled by the remote git-exec program or the os or the server.
-        if any("receive-pack" in var for var in (query, rest)):
-            env.setdefault("REMOTE_USER", os.getenv("USER"))
+        if "receive-pack" in query or "receive-pack" in rest:
+            # Fallback for when auth isn't used, but any value is misleading
+            env.setdefault("REMOTE_USER", env.get("USER", "unknown"))
         #
         if not os.path.isfile(os.path.join(repo_abs, 'HEAD')):
             self.send_error(
