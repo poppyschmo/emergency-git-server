@@ -241,9 +241,15 @@ def server(request, tmpdir_factory):
         s.proc.kill()
 
 
+@pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
+@pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
-def test_receive_with_subdir(server, testdir, ssl):
+def test_basic_errors(server, testdir, create, first, ssl):
+    # XXX no response may be sent after exception
+    # TODO find out when this happens, fix; should always send something
     env = {}
+    if first:
+        env.update({"_FIRST_CHILD_OK": "1"})
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
@@ -251,123 +257,48 @@ def test_receive_with_subdir(server, testdir, ssl):
     pe = testdir.spawn("bash %s %s" % (bw_script,
                                        str(testdir.request.config.rootdir)))
     pe.expect(r"bash.*\$")
+    twofer = get_twofer(pe)
     if ssl:
-        pe.sendline("export GIT_SSL_NO_VERIFY=1")
-        pe.expect(r"bash.*\$")
-    pe.sendline("echo foo > foo.txt")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git init")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git add -A && git commit -m 'Init'")
-    pe.expect(r"bash.*\$")
+        twofer("export GIT_SSL_NO_VERIFY=1")
+    twofer("echo foo > foo.txt")
+    twofer("git init")
+    twofer("git add -A && git commit -m 'Init'")
 
-    # Repo too shallow
-    remote = server.clone(testdir.tmpdir)
-
-    pe.sendline("git remote add origin %s" % remote)
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config -l")
-    pe.expect(r"bash.*\$")
+    # Errors
+    if create:
+        remote = "%s/test_basic_errors.git" % server.url
+    else:
+        remote = server.clone(testdir.tmpdir)
+    twofer("git remote add origin %s" % remote)
+    twofer("git config -l")
     pe.sendline("git push -u origin master")
-    pe.expect(r"fatal")
-    server.consume_log(["*WARNING*", "*first child*"])
-    pe.expect(r"bash.*\$")
+    if create:
+        twofer("fatal")  # trips before first child warning
+        server.consume_log(["*GET*403*", "*_CREATE_MISSING*"])
+    elif first:
+        twofer("up-to-date")
+        server.consume_log("*GET /test_basic_errors*200*")
+    else:
+        twofer(r"fatal")
+        server.consume_log(["*WARNING*", "*first child*"])
 
-    # Right depth
-    remote = server.clone(testdir.tmpdir, "repos")
-
-    pe.sendline("git remote set-url origin %s" % remote)
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config -l")
-    pe.expect(r"bash.*\$")
+    # OK
+    if create:
+        remote = "%s/repos/test_basic_errors.git" % server.url
+        assert server.stop() == 0  # restart server with envvar
+        server.start(_CREATE_MISSING="1", **env)
+        server.consume_log(["*Started serving*"])
+    else:
+        remote = server.clone(testdir.tmpdir, "repos")
+    twofer("git remote set-url origin %s" % remote)
+    twofer("git config -l")
     pe.sendline("git push -u origin master")
-    pe.expect("up-to-date")
-    server.consume_log("*GET*repos*200*")
-    pe.expect(r"bash.*\$")
-
-    pe.sendline("exit")
-    pe.expect(EOF)
-    assert server.stop() == 0
-
-
-@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
-def test_receive_first_child(server, testdir, ssl):
-    env = {"_FIRST_CHILD_OK": "1"}
-    if ssl:
-        env.update(_CERTFILE=server.certfile.strpath)
-    server.start(**env)
-    server.consume_log(["*Started serving*"])
-    pe = testdir.spawn("bash %s %s" % (bw_script,
-                                       str(testdir.request.config.rootdir)))
-    pe.expect(r"bash.*\$")
-    if ssl:
-        pe.sendline("export GIT_SSL_NO_VERIFY=1")
-        pe.expect(r"bash.*\$")
-    pe.sendline("echo foo > foo.txt")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git init")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git add -A && git commit -m 'Init'")
-    pe.expect(r"bash.*\$")
-
-    remote = server.clone(testdir.tmpdir)
-
-    pe.sendline("git remote add origin %s" % remote)
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config -l")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git push -u origin master")
-    pe.expect("up-to-date")
-    server.consume_log("*GET /test_receive_first_child*200*")
-    pe.expect(r"bash.*\$")
-
-    pe.sendline("exit")
-    pe.expect(EOF)
-    assert server.stop() == 0
-
-
-@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
-def test_receive_create_missing(server, testdir, ssl):
-    env = {}
-    if ssl:
-        env.update(_CERTFILE=server.certfile.strpath)
-    # No envvar
-    server.start(**env)
-    server.consume_log(["*Started serving*"])
-
-    pe = testdir.spawn("bash %s %s" % (bw_script,
-                                       str(testdir.request.config.rootdir)))
-    pe.expect(r"bash.*\$")
-
-    if ssl:
-        pe.sendline("export GIT_SSL_NO_VERIFY=1")
-        pe.expect(r"bash.*\$")
-    pe.sendline("echo foo > foo.txt")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git init")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git add -A && git commit -m 'Init'")
-    pe.expect(r"bash.*\$")
-    url = "{}/repos/test_receive_create_missing.git".format(server.url)
-    pe.sendline("git remote add origin {}".format(url))
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config -l")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git push -u origin master")
-    pe.expect("fatal")
-    server.consume_log(["*GET*403*", "*_CREATE_MISSING*"])
-    pe.expect(r"bash.*\$")
-    assert server.stop() == 0
-    server.truncate_log()
-
-    # Add envvar
-    server.start(_CREATE_MISSING="1", **env)
-    server.consume_log(["*Started serving*"])
-
-    pe.sendline("git push -u origin master")
-    pe.expect("new branch")
-    server.consume_log(["*GET*repos/*200*", "*POST*/repos/*200*"])
-    pe.expect(r"bash.*\$")
+    if create:
+        twofer("new branch")
+        server.consume_log(["*GET*/*200*", "*POST*/*200*"])
+    else:
+        twofer("up-to-date")
+        server.consume_log("*GET*repos*200*")
 
     pe.sendline("exit")
     pe.expect(EOF)
