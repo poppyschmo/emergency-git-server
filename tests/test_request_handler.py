@@ -1,7 +1,13 @@
-#!/bin/python3
 # -*- coding: utf-8 -*-
+"""
+This file is completely worthless. Should skip it completely till it can be
+redone.
+"""
 
 import pytest
+import sys
+
+is_27 = sys.version_info[:2] == (2, 7)
 
 
 @pytest.fixture
@@ -24,7 +30,7 @@ def make_temptree(tmpdir):
     """
     import os
     this_dir = os.getcwd()
-    os.chdir(tmpdir)
+    os.chdir(tmpdir.strpath)
     os.makedirs("a/b/c")
 
     from itertools import product
@@ -49,9 +55,11 @@ def bhstub():
             import os
             if os.sys.version_info >= (3, 7):
                 self.directory = os.getcwd()
+            if is_27:
+                self.client_address = ("localhost", 8000)
             self.docroot = None
 
-    return BhStub()
+    return BhStub()  # request, client_address, server ... [directory= ...]
 
 
 git_root_name = "repos"
@@ -66,13 +74,18 @@ def make_gitroot(tmpdir_factory):
     os.chdir(git_root)
     os.makedirs("A/B")
     names = repo_relpaths
-    from subprocess import run
+    try:
+        from subprocess import run
+    except ImportError:  # 27
+        from subprocess32 import run
     for name in names:
         run(("git init -q --bare %s" % name).split())
     return str(tmpdir_factory.getbasetemp()), git_root, names
 
 
 def test_dlog(bhstub, capsys, monkeypatch):
+    if is_27:
+        pytest.skip("3 only")
     bh = bhstub
     bh.dlog.__globals__["DEBUG"] = True
     fakes = ("localhost", "1/Jan/1970 00:00:00")
@@ -155,7 +168,7 @@ def test_translate_path(bhstub, make_temptree):
     from functools import partial
 
     hh = bhstub
-    hh.docroot = make_temptree
+    hh.docroot = make_temptree.strpath
     # We're not at doc root
     assert os.getcwd() != hh.docroot
     if os.sys.version_info >= (3, 7):
@@ -218,8 +231,12 @@ def test_translate_path(bhstub, make_temptree):
     # All components of docroot must exist
     hh.docroot = os.path.join(orig_dr, "fake")  # <- *Rewrite docroot*
     drplus = partial(os.path.join, hh.docroot)
-    with pytest.raises(FileNotFoundError):
-        assert hh.translate_path("foo") == drplus("foo")
+    if is_27:
+        with pytest.raises(OSError):
+            assert hh.translate_path("foo") == drplus("foo")
+    else:
+        with pytest.raises(FileNotFoundError):
+            assert hh.translate_path("foo") == drplus("foo")
 
 
 class TestFindRepoBasic:
@@ -301,7 +318,7 @@ def pytest_generate_tests(metafunc):
     # Mix in alternate git_root directory name called "fake"
     for gr in (git_root_name, "fake"):
         for relpath in (repo_relpaths):
-            full = ("", gr, *relpath.split("/"))
+            full = ["", gr] + relpath.split("/")
             for i in range(1, len(full) + 1):
                 splits.append(("/".join(full[:i]) if full[:i - 1] else "/",
                                "/".join(full[i:])))
