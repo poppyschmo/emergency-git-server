@@ -106,7 +106,8 @@ def server(request, tmpdir_factory):
             self._certfile = docroot.join("dummycert.pem")
             self._authfile = docroot.join("auth.json")
             self.openssl_cnf = docroot.join("openssl.cnf")
-            self.cmdline = [sys.executable, server_path, docroot.strpath]
+            self.cmdline = [os.getenv("GITSRV_TEST_PYEXE", sys.executable),
+                            server_path, docroot.strpath]
 
         def dumb_waiter(self, func, maxiter=30, wait_for=0.1):
             while maxiter > 0:
