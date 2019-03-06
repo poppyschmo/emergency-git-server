@@ -9,7 +9,8 @@ import sys
 import shutil
 import pytest
 import subprocess
-import emergency_git_server  # noqa: F401
+import emergency_git_server
+import dumper
 
 from _pytest.pytester import LineMatcher
 
@@ -80,10 +81,12 @@ def server(request, tmpdir_factory):
 
     docroot = tmpdir_factory.mktemp("srv", numbered=True)
     docroot.chdir()
-    src = sys.modules["emergency_git_server"].__file__
     bw_path = docroot.join("bw.sh")
-    server_path = docroot.join("emergency_git_server.py")
-    shutil.copyfile(src, server_path)
+    server_path = docroot.join("emergency_git_server.py").strpath
+    shutil.copyfile(emergency_git_server.__file__, server_path)
+    if request.config.getoption("dump_dlog"):
+        server_path = docroot.join("dumper.py").strpath
+        shutil.copyfile(dumper.__file__, server_path)
     shutil.copyfile(bw_script, bw_path)
     bw_path.chmod(0o700)
 
@@ -97,6 +100,7 @@ def server(request, tmpdir_factory):
             self.rootdir = request.config.rootdir
             self.docroot = docroot
             self.logfile = docroot.join("server.log")
+            self.pickfile = docroot.join("data.pickle")
             self._certfile = docroot.join("dummycert.pem")
             self._authfile = docroot.join("auth.json")
             self.openssl_cnf = docroot.join("openssl.cnf")
@@ -121,6 +125,7 @@ def server(request, tmpdir_factory):
         def start(self, **env):
             env = dict(os.environ, **env)
             env.setdefault("_LOGFILE", self.logfile.strpath)
+            env.setdefault("_PICKFILE", self.pickfile.strpath)
             proc = subprocess.Popen(self.cmdline, env=env)
             self.proc = proc
             assert self.dumb_waiter(self.logfile.exists) is True
@@ -137,9 +142,18 @@ def server(request, tmpdir_factory):
             self.logfile.write("")
 
         def consume_log(self, pattern, truncate=True):
-            lines = self.dumb_waiter(self.logfile.readlines)
-            latest = LineMatcher(lines)
-            latest.fnmatch_lines(pattern)
+            from _pytest.outcomes import Failed
+
+            def inner():
+                lines = self.logfile.readlines()
+                if lines:
+                    latest = LineMatcher(lines)
+                    try:
+                        latest.fnmatch_lines(pattern)
+                    except Failed:
+                        return None
+                    return True
+            self.dumb_waiter(inner)
             if truncate:
                 self.truncate_log()
 
@@ -269,6 +283,7 @@ def test_receive_with_subdir(server, testdir, ssl):
 
     pe.sendline("exit")
     pe.expect(EOF)
+    assert server.stop() == 0
 
 
 @pytest.mark.parametrize("ssl", [False, True])
@@ -304,6 +319,7 @@ def test_receive_first_child(server, testdir, ssl):
 
     pe.sendline("exit")
     pe.expect(EOF)
+    assert server.stop() == 0
 
 
 @pytest.mark.parametrize("ssl", [False, True])
@@ -351,6 +367,7 @@ def test_receive_create_missing(server, testdir, ssl):
 
     pe.sendline("exit")
     pe.expect(EOF)
+    assert server.stop() == 0
 
 
 @pytest.mark.parametrize("ssl", [False, True])
@@ -502,6 +519,7 @@ def test_simulate_teams(server, testdir, ssl):
 
     pe.sendline("exit")
     pe.expect(EOF)
+    assert server.stop() == 0
 
 
 @pytest.mark.parametrize("create", [False, True])
@@ -658,3 +676,4 @@ def test_namespaces(server, testdir, create, auth, ssl):
 
     pe.sendline("exit")
     pe.expect(EOF)
+    assert server.stop() == 0
