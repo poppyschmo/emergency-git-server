@@ -185,7 +185,7 @@ import os
 import re
 import select
 
-from subprocess import (check_output, Popen, PIPE, CalledProcessError)
+from subprocess import check_output, Popen, PIPE, CalledProcessError
 
 if sys.version_info < (3, 0):
     import httplib as HTTPStatus
@@ -198,40 +198,6 @@ else:
     from http import HTTPStatus
     from http.server import (CGIHTTPRequestHandler, HTTPServer,
                              _url_collapse_path)
-
-
-# Real, local path exposed by server as '/'. Full dereferencing with
-# os.path.realpath() might not be desirable in some situations.
-DOCROOT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 and
-                          os.path.isdir(sys.argv[1]) else ".")
-envvar_prefix = os.getenv("GITSRV_PREFIX", "_")
-
-
-def boolify_envvar(envvar, prefix=envvar_prefix):
-    """ Interpret boolean environment variables as True (whenever
-    set/exported), even if their value is an empty string, "null", or
-    "None". Compare to ``bool(os.getenv('MYENVVAR', False))``.
-
-    """
-    # "nil" is a tossup; could mean nihil (0) or false, like Lisp's ``NIL``.
-    return (os.getenv(prefix + envvar, "false").lower() not in
-            "false nil no off 0".split())
-
-
-HOST = os.getenv(envvar_prefix + "HOST", "localhost")
-PORT = int(os.getenv(envvar_prefix + "PORT", 8000))
-LOGFILE = os.getenv(envvar_prefix + "LOGFILE")
-AUTHFILE = os.getenv(envvar_prefix + "AUTHFILE")
-DEBUG = boolify_envvar("DEBUG")
-ENFORCE_DOTGIT = boolify_envvar("ENFORCE_DOTGIT")
-CREATE_MISSING = boolify_envvar("CREATE_MISSING")
-FIRST_CHILD_OK = boolify_envvar("FIRST_CHILD_OK")
-USE_NAMESPACES = boolify_envvar("USE_NAMESPACES")
-REQURE_ACCOUNT = boolify_envvar("REQURE_ACCOUNT")
-
-CERTFILE = os.getenv(envvar_prefix + "CERTFILE")
-KEYFILE = os.getenv(envvar_prefix + "KEYFILE")
-DHPARAMS = os.getenv(envvar_prefix + "DHPARAMS")
 
 
 def get_libexec_dir():
@@ -254,24 +220,26 @@ def get_libexec_dir():
     return out_path
 
 
-def get_auth_dict():
-    if AUTHFILE is None:
+def get_auth_dict(authfile):
+    if authfile is None:
         return {}
     import json
-    if os.path.exists(AUTHFILE):
-        with open(AUTHFILE) as f:
+    if os.path.exists(authfile):
+        with open(authfile) as f:
             outdict = json.load(f)
     else:
-        outdict = json.loads(AUTHFILE)
+        outdict = json.loads(authfile)
     return outdict
 
 
 class CtxServer(HTTPServer, object):
-    """Use standard per-request wrapping rather than wrap the bound
-    listen socket as an instance attribute prior to starting the loop.
-    The latter approach actually seems to work just as well, but this
-    mimics the example given in the docs_. Would be nice to get rid of
-    this class, though.
+    """SSL-aware HTTPServer.
+
+    This uses standard per-request wrapping rather than wrapping the
+    bound listen socket as an instance attribute prior to starting the
+    loop. The latter approach actually seems to work just as well, but
+    this mimics the example given in the docs_. Would be nice to get rid
+    of this class, though.
 
     BTW, that example also uses ``socket.SHUT_RDWR`` instead of the
     write-only variant, used here.  But read-write seems to trigger "bad
@@ -335,14 +303,20 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
     __doc__ for details.
     """
 
+    docroot = None
+    auth_dict = None
+    git_exec_path = None
     has_openssl = None
     cipher = None
-    git_exec_path = get_libexec_dir()
-    auth_dict = get_auth_dict()
-    docroot = DOCROOT
-    get_RE = re.compile(r'^/.+/objects/'
+    get_re = re.compile(r'^/.+/objects/'
                         r'(pack/pack-[0-9a-f]{40}\.(pack|idx)|'
                         r'[0-9a-f]{2}/[0-9a-f]{38})$')
+
+    def __init__(self, *args, **kwargs):
+        self.docroot = DOCROOT
+        self.git_exec_path = get_libexec_dir()
+        self.auth_dict = get_auth_dict(AUTHFILE)
+        super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
     def dlog(self, fmt, *msg, **kwargs):
         """ This prints concatenated args and pretty-prints kwargs. It
@@ -472,7 +446,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                                     nshead=nshead.decode())
         #
         # Disqualify GET requests for static resources in ``$GIT_DIR/objects``.
-        if self.get_RE.match(collapsed_path):
+        if self.get_re.match(collapsed_path):
             return False
         # XXX a temporary catch-all to handle requests for extant paths that
         # don't resolve to ``$GIT_DIR/objects``. Separating this block from the
@@ -603,6 +577,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         try:
             thisdir = os.getcwd()
         except FileNotFoundError:
+            # Is this a intentional? Seems ``is_cgi`` may rewrite self.docroot
             thisdir = DOCROOT
             DEBUG and self.dlog("call to os.getcwd() failed")
         os.chdir(self.docroot)
@@ -1014,85 +989,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             DEBUG and self.dlog("CGI script exited OK")
 
 
-def validate_logpath(inpath=None, create=False, maxsize=2):
-    import os
-    outpath = None
-    if inpath is not None:
-        # On UNIX, write permissions of parent dir don't matter for
-        # existing files
-        if os.path.isfile(inpath) and os.access(inpath, os.W_OK):
-            outpath = inpath
-        elif os.access(os.path.dirname(inpath), os.W_OK):
-            outpath = inpath
-            if os.path.isfile(outpath):
-                outpath += ".new"
-            os.mknod(outpath, 0o644)
-        else:
-            return None
-        # If attempting to support Windows, assume Python version >= 3.5
-        if os.path.getsize(outpath) > 2**20 * maxsize:
-            try:
-                os.truncate(outpath, 0)
-            except AttributeError:
-                # Surely there's some simpler way to do this
-                with open(outpath, "w") as f:
-                    os.ftruncate(f.fileno(), 0)
-    return outpath
-
-
-def set_ssl_context():
-    """
-    Verify local certificate paths and return an ssl context object.
-    """
-    global CERTFILE, KEYFILE, DHPARAMS, PORT
-    gdict = globals()
-    for fid in ("CERTFILE", "KEYFILE", "DHPARAMS"):
-        fpath = gdict.get(fid)
-        if fpath is None:
-            continue
-        fpath = os.path.expanduser(fpath)
-        fpath = os.path.expandvars(fpath)
-        if os.path.isfile(fpath):
-            gdict[fid] = os.path.realpath(fpath)
-        else:
-            gdict[fid] = None
-    #
-    if CERTFILE is None:
-        KEYFILE = DHPARAMS = None
-        return None
-    # Ensure lone certificates include a key
-    if KEYFILE is None:
-        with open(CERTFILE) as f:
-            pem = f.readlines()
-            msg = None
-            try:
-                k = next(pem.index(l) for l in pem if 'END PRIVATE' in l)
-                c = next(pem.index(l) for l in pem if 'CERTIFICATE' in l)
-            except StopIteration:
-                msg = ("Invalid certificate. Please set ``*_KEYFILE`` or "
-                       "provide a combined cert in PEM format.")
-            else:
-                if not k < c:
-                    msg = ("Invalid certificate. For combined PEM certs, "
-                           "the key must appear atop the cert")
-            if msg:
-                raise ValueError(msg)
-    import ssl
-    context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
-    # Like ``SSLContext.set_default_verify_paths()``, ``set_ecdh_curve()``
-    # doesn't exist in 3.5.x, at least not on Fedora's system python3.
-    # XXX some expert tutorial from 2013 says to set this to ``secp384r1``
-    # on Apache/NGINX. Not sure if that's still the way to go.
-    if DHPARAMS:
-        context.load_dh_params(DHPARAMS)
-    # XXX probably best not to mess with these...
-    # context.set_ciphers("EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH")
-    context.load_cert_chain(CERTFILE, KEYFILE)
-    if PORT == 8000:
-        PORT = 4443
-    return context
-
-
 def register_signals(server, quitters, keepers=None):
     """Attach a handler to signals named in quitters or keepers.
     The module's default behavior is to quit without teardown for
@@ -1169,8 +1065,95 @@ def serve(server_class, name="Git services", context=None):
         server.server_close()
 
 
-def main():
-    #
+def set_ssl_context(certfile=None, keyfile=None, dhparams=None):
+    """Verify certs exist on filesystem, return an SSL context object.
+    """
+    def verify(val):
+        if val:
+            fpath = os.path.expanduser(os.path.expandvars(val))
+            if os.path.isfile(fpath):
+                return os.path.realpath(fpath)
+
+    certfile = verify(certfile)
+    if certfile is None:
+        return None
+
+    # Ensure lone certificates include a key
+    keyfile = verify(keyfile)
+    if keyfile is None:
+        with open(certfile) as f:
+            pem = f.readlines()  # Can't just iter f, must expand/tee
+            msg = None
+            try:
+                k = next(pem.index(l) for l in pem if 'END PRIVATE' in l)
+                c = next(pem.index(l) for l in pem if 'CERTIFICATE' in l)
+            except StopIteration:
+                msg = ("Invalid certificate. Please set ``*_KEYFILE`` or "
+                       "provide a combined cert in PEM format.")
+            else:
+                if not k < c:
+                    msg = ("Invalid certificate. For combined PEM certs, "
+                           "the key must appear first.")
+            if msg:
+                raise RuntimeError(msg)
+    import ssl
+    context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
+    # Like ``SSLContext.set_default_verify_paths()``, ``set_ecdh_curve()``
+    # doesn't exist in 3.5.x, at least not on Fedora's system python3.
+    # XXX some expert tutorial from 2013 says to set this to ``secp384r1``
+    # on Apache/NGINX. Not sure if that's still the way to go.
+    dhparams = verify(dhparams)
+    if dhparams:
+        context.load_dh_params(dhparams)
+    # XXX probably best not to mess with these...
+    # context.set_ciphers("EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH")
+    context.load_cert_chain(certfile, keyfile)
+    return context
+
+
+def validate_logpath(inpath=None, create=False, maxsize=2):
+    import os
+    outpath = None
+    if inpath is not None:
+        # On UNIX, write permissions of parent dir don't matter for
+        # existing files
+        if os.path.isfile(inpath) and os.access(inpath, os.W_OK):
+            outpath = inpath
+        elif os.access(os.path.dirname(inpath), os.W_OK):
+            outpath = inpath
+            if os.path.isfile(outpath):
+                outpath += ".new"
+            os.mknod(outpath, 0o644)
+        else:
+            return None
+        # If attempting to support Windows, assume Python version >= 3.5
+        if os.path.getsize(outpath) > 2**20 * maxsize:
+            try:
+                os.truncate(outpath, 0)
+            except AttributeError:
+                # Surely there's some simpler way to do this
+                with open(outpath, "w") as f:
+                    os.ftruncate(f.fileno(), 0)
+    return outpath
+
+
+def _boolify_envvar(val):
+    """Interpret boolean environment variables.
+    True whenever set/exported, even if value is an empty string,
+    "null", or "none".
+    """
+    falsey = ("false", "nil", "no", "off", "0")
+    return (val if val is not None else "false").lower() not in falsey
+
+
+def main(**overrides):
+    """Set globals from environment and call serve().
+    Overrides should be unprefixed names and native types, e.g. DEBUG=1 not
+    _DEBUG="1".
+    """
+    global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, ENFORCE_DOTGIT, \
+        CREATE_MISSING, FIRST_CHILD_OK, USE_NAMESPACES, REQURE_ACCOUNT
+
     if sys.version_info < (3, 5) and list(sys.version_info)[:2] != [2, 7]:
         print("WARNING: untested on Python versions < 3.5, except for 2.7",
               file=sys.stderr)
@@ -1180,14 +1163,50 @@ def main():
                         __doc__.split("Notes\n")[0].splitlines() if
                         not l.endswith("::")))
         return
-    #
+
+    # Real, local path exposed by server as '/'. Full dereferencing with
+    # os.path.realpath() might not be desirable in some situations.
+    DOCROOT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 and
+                              os.path.isdir(sys.argv[1]) else ".")
+
+    envvar_prefix = os.getenv("GITSRV_PREFIX", "_")
+    absent = object()
+
+    def getvar(var, is_bool=False):
+        got = overrides.get(var, absent)
+        if got is not absent:
+            return got
+        val = os.getenv("{}{}".format(envvar_prefix, var))
+        return _boolify_envvar(val) if is_bool else val
+
+    HOST = getvar("HOST") or "localhost"
+    PORT = getvar("PORT")
+    LOGFILE = getvar("LOGFILE")
+    AUTHFILE = getvar("AUTHFILE")
+    DEBUG = getvar("DEBUG", is_bool=True)
+    ENFORCE_DOTGIT = getvar("ENFORCE_DOTGIT", is_bool=True)
+    CREATE_MISSING = getvar("CREATE_MISSING", is_bool=True)
+    FIRST_CHILD_OK = getvar("FIRST_CHILD_OK", is_bool=True)
+    USE_NAMESPACES = getvar("USE_NAMESPACES", is_bool=True)
+    REQURE_ACCOUNT = getvar("REQURE_ACCOUNT", is_bool=True)
+
+    context = set_ssl_context(certfile=getvar("CERTFILE"),
+                              keyfile=getvar("KEYFILE"),
+                              dhparams=getvar("DHPARAMS"))
+    # If None, could verify free and otherwise increment, but these are
+    # listening/"bind" addresses, so maybe better to just fail
+    if PORT is None:
+        PORT = 4443 if context else 8000
+    else:
+        PORT = int(PORT)
+
     logfile = validate_logpath(LOGFILE, create=True, maxsize=0)
-    #
+
     if logfile is None:
-        serve(CtxServer, context=set_ssl_context())
+        serve(CtxServer, context=context)
         return
 
-    class AsRequested(CtxServer):
+    class AsRequested(CtxServer):  # Really need whole other cls here?
         def service_actions(self):
             sys.stderr.flush()
             sys.stdout.flush()
@@ -1199,7 +1218,7 @@ def main():
             try:
                 _stderr = sys.stderr
                 sys.stderr = f
-                serve(AsRequested, context=set_ssl_context())
+                serve(AsRequested, context=context)
             finally:
                 sys.stderr = _stderr
         else:
@@ -1207,7 +1226,7 @@ def main():
             # methods like ``SocketServer.BaseServer.handle_error`` don't print
             # to stderr.
             with redirect_stderr(f), redirect_stdout(sys.stderr):
-                serve(AsRequested, context=set_ssl_context())
+                serve(AsRequested, context=context)
 
 
 if __name__ == "__main__":
