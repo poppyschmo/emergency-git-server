@@ -40,17 +40,17 @@ emailAddress           = {email}
 
 authconf_source = """
 {
-  "/org/test_namespaces.git": {
+  "%(pre)s/test_namespaces.git": {
     "description": "Bot",
     "secretsfile": "%(secretsfile)s",
     "privaterepo": false
   },
-  "/org/maintainer": {
+  "%(pre)s/maintainer": {
     "description": "Boss of public repo",
     "secretsfile": "%(secretsfile)s",
     "privaterepo": false
   },
-  "/org/contributor": {
+  "%(pre)s/contributor": {
     "description": "Volunteer",
     "secretsfile": "%(secretsfile)s",
     "privaterepo": true
@@ -228,8 +228,10 @@ def server(request, tmpdir_factory):
                 # Use crypt(3)-generated passwords, which don't require
                 # openssl: maintainer: "forkme", contributor: "changeme"
                 secretsfile.write(secrets_source)
+                pre = ("/org", "")["first" in request._pyfuncitem.name]
                 self._authfile.write(
-                    authconf_source % dict(secretsfile=secretsfile.strpath)
+                    authconf_source % dict(pre=pre,
+                                           secretsfile=secretsfile.strpath)
                 )
             return self._authfile
 
@@ -525,14 +527,17 @@ def test_simulate_teams(server, testdir, ssl):
 
 
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
+@pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("auth", [False, True], ids=["__", "auth"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
-def test_namespaces(server, testdir, create, auth, ssl):
+def test_namespaces(server, testdir, create, first, auth, ssl):
     env = {"_USE_NAMESPACES": "1"}
-    if auth:
-        env.update(_AUTHFILE=server.authfile.strpath)
     if create:
         env.update(_CREATE_MISSING="1")
+    if first:
+        env.update(_FIRST_CHILD_OK="1")
+    if auth:
+        env.update(_AUTHFILE=server.authfile.strpath)
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     #
@@ -556,7 +561,10 @@ def test_namespaces(server, testdir, create, auth, ssl):
 
     # Upstream
     project_scm = testdir.tmpdir.join("_project")  # somewhere else
-    project_path = "org/test_namespaces.git"
+    if first:
+        project_path = "test_namespaces.git"
+    else:
+        project_path = "org/test_namespaces.git"
     project_dir = server.docroot.join(project_path)
     project_url = "{}/{}".format(server.url, project_path)
     project_scm.mkdir()
@@ -580,7 +588,10 @@ def test_namespaces(server, testdir, create, auth, ssl):
 
     # Maintainer
     maintainer = testdir.tmpdir.join("maintainer")
-    maintainer_url = "{}/org/maintainer/test_namespaces.git".format(server.url)
+    if first:
+        maintainer_url = "%s/maintainer/test_namespaces.git" % server.url
+    else:
+        maintainer_url = "%s/org/maintainer/test_namespaces.git" % server.url
     twofer("git clone -b master -o upstream {} {}".format(project_url,
                                                           maintainer.strpath))
     twofer("cd %s || exit 1" % maintainer.strpath)
@@ -611,8 +622,10 @@ def test_namespaces(server, testdir, create, auth, ssl):
 
     # Contrib
     contributor = testdir.tmpdir.join("contributor")
-    contributor_url = ("{}/org/contributor/test_namespaces.git"
-                       .format(server.url))
+    if first:
+        contributor_url = "%s/contributor/test_namespaces.git" % server.url
+    else:
+        contributor_url = "%s/org/contributor/test_namespaces.git" % server.url
     twofer("git clone -b master -o upstream {} {}".format(maintainer_url,  # <-
                                                           contributor.strpath))
     twofer("cd %s || exit 1" % contributor.strpath)
