@@ -64,9 +64,10 @@ contributor:T0NXShw7R7Gfg
 """
 
 bash_prompt = (r"bash.*\$")
+prompt_re = bash_prompt
 
 
-def get_twofer(child, prompt=bash_prompt):
+def get_twofer(child, prompt=prompt_re):
     def _twofer(*args, **kwargs):
         child.sendline(*args, **kwargs)
         return child.expect(prompt)
@@ -257,7 +258,7 @@ def test_basic_errors(server, testdir, create, first, ssl):
     server.consume_log(["*Started serving*"])
     pe = testdir.spawn("bash %s %s" % (bw_script,
                                        str(testdir.request.config.rootdir)))
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     twofer = get_twofer(pe)
     if ssl:
         twofer("export GIT_SSL_NO_VERIFY=1")
@@ -325,7 +326,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
                                        str(testdir.request.config.rootdir)))
     twofer = get_twofer(pe)
 
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     if ssl:
         twofer("export GIT_SSL_NO_VERIFY=1")
 
@@ -348,7 +349,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
         pe.sendline("git push -u origin master")
         pe.expect("new branch")
         server.consume_log(["*GET*/*200*", "*POST*/*200*"])
-        pe.expect(r"bash.*\$")
+        pe.expect(prompt_re)
     else:
         clone_rv = server.clone(dev, upath)
         assert clone_rv == url
@@ -356,7 +357,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
         twofer("git branch -u origin/master master")
     pe.sendline("git ls-remote")
     pe.expect(r"refs/heads/master")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
 
     # Others join
     ops = testdir.tmpdir.join("ops")
@@ -367,21 +368,21 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     # Develop
     pe.sendline("git checkout -b topic")
     pe.expect(".*new branch.*topic.*")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     pe.sendline("mkdir src && "
                 "echo '#ifndef NUMS_H\n#define NUMS_H\n' > src/nums.h && "
                 "git add -A && git commit -m 'Begin nums'")
     pe.expect("1 file changed")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     pe.sendline("git push -u origin topic")
     pe.expect(".*new branch.*topic.*")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     pe.sendline("git checkout master && git merge topic")
     pe.expect("1 file changed")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     pe.sendline("git push")
     pe.expect("master -> master")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
 
     # One-off fetching
     twofer("cd ../ops || exit")
@@ -391,7 +392,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     pe.sendline("git fetch origin master:refs/remotes/origin/mymaster")
     pe.expect(["master *-> *origin/mymaster",
                "master *-> *origin/master"])
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     twofer("git branch -vr")
 
     # Dev rewrites shared history
@@ -399,17 +400,17 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     twofer("echo 'TODO:\n- finish nums' >> README.md")
     pe.sendline("git add -A && git commit --amend -C @")
     pe.expect("2 files changed")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     pe.sendline("git push --force")
     pe.expect("forced update")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
 
     # Rejected fetch
     twofer("cd %s || exit" % ops.strpath)
     pe.sendline("git fetch origin master:refs/remotes/origin/mymaster \\\n"
                 "topic:refs/remotes/origin/topic")
     pe.expect(["rejected", "new branch"])
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
 
     # Pushing refspecs
     twofer("cd %s || exit" % qa.strpath)
@@ -417,12 +418,12 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     twofer("echo 'dist: stable' > .qa-ci.dsl")
     pe.sendline("git add -A && git commit -m 'add qa-ci config'")
     pe.expect("1 file changed")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     twofer("git config remote.origin.push "
            "refs/heads/master:refs/heads/qa/master")
     pe.sendline("git push")
     pe.expect("new branch.*master.*->.*qa/master")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     twofer("git ls-remote --refs")
 
     # Multi-valued fetch entry
@@ -439,7 +440,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     twofer("git ls-remote --refs")
     pe.sendline("git push origin :topic")
     pe.expect("deleted")
-    pe.expect(r"bash.*\$")
+    pe.expect(prompt_re)
     twofer("git ls-remote --refs")
 
     pe.sendline("exit")
@@ -478,7 +479,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
 
     if ssl:
         pe.sendline("export GIT_SSL_NO_VERIFY=1")
-        pe.expect(r"bash.*\$")
+        pe.expect(prompt_re)
 
     # Upstream
     project_scm = testdir.tmpdir.join("_project")  # somewhere else
