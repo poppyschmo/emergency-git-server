@@ -79,7 +79,9 @@ def server(request, tmpdir_factory):
         pytest.fail("Bubblewrap not installed")
     from time import sleep
 
-    docroot = tmpdir_factory.mktemp("srv", numbered=True)
+    name = request._pyfuncitem.name.replace("[", ".").strip("]")
+    name = "srv-{}".format(name)
+    docroot = tmpdir_factory.mktemp(name, numbered=True)
     docroot.chdir()
     bw_path = docroot.join("bw.sh")
     server_path = docroot.join("emergency_git_server.py").strpath
@@ -237,7 +239,7 @@ def server(request, tmpdir_factory):
         s.proc.kill()
 
 
-@pytest.mark.parametrize("ssl", [False, True])
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_receive_with_subdir(server, testdir, ssl):
     env = {}
     if ssl:
@@ -286,7 +288,7 @@ def test_receive_with_subdir(server, testdir, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.parametrize("ssl", [False, True])
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_receive_first_child(server, testdir, ssl):
     env = {"_FIRST_CHILD_OK": "1"}
     if ssl:
@@ -322,7 +324,7 @@ def test_receive_first_child(server, testdir, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.parametrize("ssl", [False, True])
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_receive_create_missing(server, testdir, ssl):
     env = {}
     if ssl:
@@ -370,7 +372,7 @@ def test_receive_create_missing(server, testdir, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.parametrize("ssl", [False, True])
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_simulate_teams(server, testdir, ssl):
     """This is from ProGit, the 'Git Book'."""
     env = {}
@@ -522,9 +524,9 @@ def test_simulate_teams(server, testdir, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.parametrize("create", [False, True])
-@pytest.mark.parametrize("auth", [False, True])
-@pytest.mark.parametrize("ssl", [False, True])
+@pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
+@pytest.mark.parametrize("auth", [False, True], ids=["__", "auth"])
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_namespaces(server, testdir, create, auth, ssl):
     env = {"_USE_NAMESPACES": "1"}
     if auth:
@@ -677,3 +679,19 @@ def test_namespaces(server, testdir, create, auth, ssl):
     pe.sendline("exit")
     pe.expect(EOF)
     assert server.stop() == 0
+
+
+def test_create_ioset(testdir):
+    session_dir = testdir.tmpdir.parts()[-2]
+    subs = (session_dir.join(d).join("data.pickle").realpath() for
+            d in os.listdir(session_dir.strpath)
+            if d.startswith("srv-") and d.endswith("current"))
+    picks = [d for d in subs if d.exists()]
+    if not picks:
+        return
+    collected = dumper.collect_picks(*picks)
+    assert collected
+
+    import json
+    with testdir.tmpdir.join("collected.json").open("w") as flow:
+        json.dump(collected, flow, indent=2)
