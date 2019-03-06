@@ -185,8 +185,7 @@ import os
 import re
 import select
 
-from subprocess import (check_output, list2cmdline, Popen,
-                        PIPE, CalledProcessError)
+from subprocess import (check_output, Popen, PIPE, CalledProcessError)
 
 if sys.version_info < (3, 0):
     import httplib as HTTPStatus
@@ -351,7 +350,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         stderr without summoning the logging module.
         """
         if not DEBUG:
-            return
+            raise RuntimeError("DEBUG is OFF but dlog called")
         import inspect
         ctx = inspect.stack()[1]
         if hasattr(ctx, "function"):
@@ -443,8 +442,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         ns = None
         if USE_NAMESPACES:
             ns_test = self.find_repo(collapsed_path, allow_fake=True)
-            self.dlog("is_cgi - ns_test:", USE_NAMESPACES=USE_NAMESPACES,
-                      ns_test=ns_test, git_root=git_root)
+            DEBUG and self.dlog("is_cgi - ns_test:",
+                                USE_NAMESPACES=USE_NAMESPACES,
+                                ns_test=ns_test, git_root=git_root)
             if ns_test[0] != git_root:
                 git_root, tail = ns_test
                 git_root, ns = self.find_repo(git_root)
@@ -458,7 +458,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 else:
                     self.path = collapsed_path = (git_root.rstrip("/") +
                                                   "/" + tail.lstrip("/"))
-        self.dlog("enter", git_root=git_root, ns=ns, tail=tail)
+        DEBUG and self.dlog("enter", git_root=git_root, ns=ns, tail=tail)
         if ns:
             nsrepo = os.path.join(git_root.lstrip("/"), tail.partition("/")[0])
             nspath = os.path.join(self.docroot, nsrepo)
@@ -468,7 +468,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             except CalledProcessError as e:
                 self.log_error("{!r}".format(e))
             else:
-                self.dlog("%s/HEAD:" % nsrepo, nshead=nshead.decode())
+                DEBUG and self.dlog("%s/HEAD:" % nsrepo,
+                                    nshead=nshead.decode())
         #
         # Disqualify GET requests for static resources in ``$GIT_DIR/objects``.
         if self.get_RE.match(collapsed_path):
@@ -529,12 +530,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     override, export "_FIRST_CHILD_OK=1";
                     see usage; hit Ctrl-C (SIGINT) to exit
                     """
-            self.dlog("git_root missing",
-                      gr_test=gr_test,
-                      tail=tail,
-                      mutate_path=mutate_path,
-                      docroot=self.docroot,
-                      collapsed_path=collapsed_path)
+            DEBUG and self.dlog("git_root missing",
+                                gr_test=gr_test,
+                                tail=tail,
+                                mutate_path=mutate_path,
+                                docroot=self.docroot,
+                                collapsed_path=collapsed_path)
             if msg is not None:
                 self.send_error(HTTPStatus.FORBIDDEN, msg)
                 # Raise exception so msg is prominent in server-side logs
@@ -582,13 +583,13 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 except CalledProcessError as e:
                     self.log_error('%r', e)
                 else:
-                    self.dlog('created new repo', cp=cp)
-        self.dlog("leave",
-                  **{"collapsed_path": collapsed_path,
-                     "git_root": self.find_repo(collapsed_path)[0],
-                     "cgi_cand": cgi_cand,
-                     "self.repo_info": self.repo_info,
-                     "returned": True})
+                    DEBUG and self.dlog('created new repo', cp=cp)
+        DEBUG and self.dlog("leave",
+                            **{"collapsed_path": collapsed_path,
+                               "git_root": self.find_repo(collapsed_path)[0],
+                               "cgi_cand": cgi_cand,
+                               "self.repo_info": self.repo_info,
+                               "returned": True})
         return True
 
     def translate_path(self, path):
@@ -603,7 +604,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             thisdir = os.getcwd()
         except FileNotFoundError:
             thisdir = DOCROOT
-            self.dlog("call to os.getcwd() failed")
+            DEBUG and self.dlog("call to os.getcwd() failed")
         os.chdir(self.docroot)
         if hasattr(self, "directory"):
             orig_directory = self.directory
@@ -691,7 +692,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         Otherwise, it responds with a 301 MOVED_PERMANENTLY.
         """
         if self.cipher:
-            self.dlog("SSL info", cipher=self.cipher)
+            DEBUG and self.dlog("SSL info", cipher=self.cipher)
         if not self.auth_dict:
             return super(HTTPBackendHandler, self).send_head()
         #
@@ -751,7 +752,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         authorization = self.headers.get("authorization")
         #
         if authorization:
-            self.dlog("auth string sent: %r" % authorization)
+            DEBUG and self.dlog("auth string sent: %r" % authorization)
             authorization = authorization.split()
             if len(authorization) == 2:
                 import base64
@@ -771,8 +772,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     pass
                 else:
                     authorization = authorization.split(':')
-                    self.dlog("processed auth: "
-                              "{!r}".format(authorization))
+                    DEBUG and self.dlog("processed auth: "
+                                        "{!r}".format(authorization))
                     if (len(authorization) == 2 and
                             authorization[0] in secdict and
                             self.verify_pass(secdict[authorization[0]],
@@ -853,7 +854,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         repo_uri = root + '/' + repo
         repo_abs = self.translate_path(repo_uri)
         #
-        self.dlog("enter", **dict(
+        DEBUG and self.dlog("enter", **dict(
             item for item in locals().items() if item[0] in
             ('root', 'rest') or item[0].startswith('repo')))
         #
@@ -872,7 +873,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     HTTPStatus.PRECONDITION_FAILED,
                     "CGI script is not executable (%r)" % plumbing_cmd)
                 return
-            self.dlog("git-plumbing command", path=plumbing_cmd)
+            DEBUG and self.dlog("git-plumbing command", path=plumbing_cmd)
         else:
             self.send_error(HTTPStatus.NOT_FOUND,
                             "- CGI Script '%s' not found." % repo_abs)
@@ -953,7 +954,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if cookie_str:
             env['HTTP_COOKIE'] = cookie_str
         #
-        self.dlog("headers", **self.headers)
+        DEBUG and self.dlog("headers", **self.headers)
         #
         # XXX Other HTTP_* headers
         # Since we're setting the env in the parent, provide empty
@@ -964,11 +965,11 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             env.setdefault(k, "")
         #
         # Env vars required by ``git-http-backend`` and/or rfc3875
-        self.dlog("envvars",
-                  **dict(item for item in env.items() if
-                         item[0] in rfcvars or
-                         any(item[0].startswith(pre + '_') for
-                             pre in 'query path git remote'.upper().split())))
+        if DEBUG:
+            _these = {k: v for k, v in env.items() if k in rfcvars or
+                      any(k.startswith(p) for
+                          p in ("QUERY_", "PATH_", "GIT_", "REMOTE_"))}
+            self.dlog("envvars", **_these)
         #
         self.send_response(HTTPStatus.OK, "Script output follows")
         if hasattr(self, "flush_headers"):
@@ -977,7 +978,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         cmdline = [gitprg_path]
         if query and '=' not in query:
             cmdline.append(query)
-        self.dlog("command: %s", list2cmdline(cmdline))
+        DEBUG and self.dlog("cmdline", cmdline=cmdline)
         try:
             nbytes = int(length)
         except (TypeError, ValueError):
@@ -1010,7 +1011,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if status:
             self.log_error("CGI script exit status %#x", status)
         else:
-            self.dlog("CGI script exited OK")
+            DEBUG and self.dlog("CGI script exited OK")
 
 
 def validate_logpath(inpath=None, create=False, maxsize=2):
