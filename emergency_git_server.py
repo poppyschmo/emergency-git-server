@@ -281,6 +281,7 @@ class CtxServer(HTTPServer, object):
     .. _docs: https://docs.python.org/3.6/library
        /ssl.html#server-side-operation
     """
+
     def __init__(self, server_address, RequestHandlerClass, context=None):
         self.ssl_context = context
         super(CtxServer, self).__init__(server_address, RequestHandlerClass,
@@ -567,12 +568,13 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 # Assume mode is set according to umask
                 os.makedirs(uri)
             except Exception as err:
-                if hasattr(__builtins__, "FileExistsError"):
+                try:
                     if not isinstance(err, FileExistsError):
                         raise
-                elif (not isinstance(err, OSError) or
-                      err.errno != os.errno.EEXIST):  # 2.7
-                    raise
+                except NameError:
+                    if (not isinstance(err, OSError)
+                            or err.errno != os.errno.EEXIST):  # 2.7
+                        raise
             # Target repo be empty
             if len(os.listdir(uri)) == 0:
                 try:
@@ -688,7 +690,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         html directory listing is to be generated and returned.
         Otherwise, it responds with a 301 MOVED_PERMANENTLY.
         """
-        print("\n<<<<<<<<<<: %r" % self.raw_requestline, file=sys.stderr)
         if self.cipher:
             self.dlog("SSL info", cipher=self.cipher)
         if not self.auth_dict:
