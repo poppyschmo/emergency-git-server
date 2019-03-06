@@ -1,7 +1,3 @@
-#!/bin/python3
-# -*- coding: UTF-8 -*-
-
-
 def test_boolify_envvar():
     import os
 
@@ -23,6 +19,3 @@ def test_boolify_envvar():
     for v in "false nil no off 0 False Nil No Off".split():
         os.environ["_TEST_ENVVAR"] = v
         assert boolify_envvar("TEST_ENVVAR") is False
-
-
-#
