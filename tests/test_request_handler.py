@@ -5,9 +5,8 @@ redone.
 """
 
 import pytest
-import sys
 
-is_27 = sys.version_info[:2] == (2, 7)
+from conftest import is_27
 
 
 @pytest.fixture

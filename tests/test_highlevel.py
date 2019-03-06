@@ -10,11 +10,19 @@ import shutil
 import pytest
 import subprocess
 import emergency_git_server
-import dumper
 
 from _pytest.pytester import LineMatcher
 
-from pexpect import EOF
+from conftest import is_27
+
+try:
+    import dumper
+except Exception:
+    assert is_27
+try:
+    from pexpect import EOF
+except ImportError:
+    assert is_27
 
 bw_script = os.path.join(os.path.dirname(__file__), "bw.sh")
 
@@ -250,6 +258,7 @@ def server(request, tmpdir_factory):
         s.proc.kill()
 
 
+@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
 @pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
@@ -313,6 +322,7 @@ def test_basic_errors(server, testdir, create, first, ssl):
     assert server.stop() == 0
 
 
+@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
 @pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
@@ -453,6 +463,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     assert server.stop() == 0
 
 
+@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
 @pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("auth", [False, True], ids=["__", "auth"])
@@ -620,6 +631,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     assert server.stop() == 0
 
 
+@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 def test_create_ioset(testdir):
     session_dir = testdir.tmpdir.parts()[-2]
     subs = (session_dir.join(d).join("data.pickle").realpath() for

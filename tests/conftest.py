@@ -8,6 +8,8 @@ if not os.path.basename(sys.argv[0]) == "setup.py":
     sys.path.insert(0, os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))))
 
+is_27 = sys.version_info[:2] == (2, 7)
+
 
 def replace_all(s, reps):
     """
