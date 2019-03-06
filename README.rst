@@ -26,7 +26,7 @@ Use case
 On the host
     .. code:: console
 
-        laptop:~$ curl -L "$github_raw_url" | python3 - ./www &
+        laptop:~$ curl -L "$github_raw_url" | python3 - ./www
         Serving over port 8000 ...
 
 On the client
@@ -40,7 +40,7 @@ Some caveats
        (likely of a virtual bridge) in place of ``localhost`` or
        ``laptop.local``. Export that (or ``0.0.0.0``) as ``_HOST`` to the
        server's environment.
-    2. The ``$GIT_DIR`` (``.git`` folder or bare repo) being cloned must
+    2. The ``$GIT_DIR`` being cloned (``.git`` folder or bare repo) must
        reside 2+ levels below the "document root" (``~/www`` in the example
        above). If that's a problem, export ``_FIRST_CHILD_OK=1`` or make a
        dummy tree and nest a link to the repo::
@@ -52,9 +52,10 @@ Some caveats
             └── my_repo/
                 └── .git/
 
-    3. Non-bare repos must have the ``receive.denyCurrentBranch`` option
-       set to ``updateInstead`` in order to receive updates (pushes) and
-       update the working directory
+    3. Non-bare repos must have the ``receive.denyCurrentBranch`` option set to
+       ``updateInstead`` in order to receive pushes and update the working
+       directory. (The same applies to any transport when the pushed branch is
+       checked out on the receiving end.)
 
        .. code:: console
 
