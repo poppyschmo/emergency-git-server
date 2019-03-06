@@ -221,6 +221,8 @@ else:
     from http.server import (CGIHTTPRequestHandler, HTTPServer,
                              _url_collapse_path)
 
+__version__ = "0.0.8"
+
 
 def get_libexec_dir():
     """Return path to dir containing Git plumbing exes"""
