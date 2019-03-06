@@ -108,6 +108,12 @@ def server(request, tmpdir_factory):
     shutil.copyfile(bw_script, bw_path)
     bw_path.chmod(0o700)
 
+    if not os.getenv("USER"):
+        from _pytest.tmpdir import get_user
+        env_user = get_user()
+    if not os.getenv("HOME"):
+        env_home = "/home/%s" % env_user
+
     class Server:
         proc = None
         port = None
@@ -227,8 +233,11 @@ def server(request, tmpdir_factory):
                 return True
 
             if not self.openssl_cnf.exists():
-                email = subprocess.check_output(["git",
-                                                 "config", "user.email"])
+                env = os.environ.copy()
+                if not os.getenv("HOME"):  # TOX
+                    env.update(HOME=env_home, USER=env_user)
+                email = subprocess.check_output(["git", "config",
+                                                 "user.email"], env=env)
                 self.openssl_cnf.write(
                     certconf_source.format(path=certstr, email=email.decode())
                 )

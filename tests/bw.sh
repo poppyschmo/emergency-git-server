@@ -10,6 +10,13 @@ fi
 
 [[ $USER ]] || { USER=$(id -un); export USER; }
 [[ $HOSTNAME ]] || { HOSTNAME=$(hostname -f); export HOSTNAME; }
+if [[ ! $HOME ]]; then
+    HOME=/home/$USER
+    if [[ ! $HOME ]]; then
+        exit 2
+    fi
+    export HOME
+fi
 #                                                     shellcheck disable=SC2206
 bwrap_args=(
     $XTRA_BWRAP_ARGS
