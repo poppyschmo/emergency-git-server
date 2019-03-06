@@ -374,44 +374,54 @@ def test_receive_create_missing(server, testdir, ssl):
     assert server.stop() == 0
 
 
+@pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
+@pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
-def test_simulate_teams(server, testdir, ssl):
+def test_simulate_teams(server, testdir, create, first, ssl):
     """This is from ProGit, the 'Git Book'."""
     env = {}
+    if create:
+        env.update(_CREATE_MISSING="1")
+    if first:
+        env.update(_FIRST_CHILD_OK="1")
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
-    server.start(_CREATE_MISSING="1")
+    server.start(**env)
     server.consume_log(["*Started serving*"])
 
     pe = testdir.spawn("bash %s %s" % (bw_script,
                                        str(testdir.request.config.rootdir)))
-
-    url = "{}/repos/test_simulate_teams.git".format(server.url)
+    twofer = get_twofer(pe)
 
     pe.expect(r"bash.*\$")
     if ssl:
-        pe.sendline("export GIT_SSL_NO_VERIFY=1")
-        pe.expect(r"bash.*\$")
+        twofer("export GIT_SSL_NO_VERIFY=1")
+
+    if first:
+        upath = "test_simulate_teams.git"
+    else:
+        upath = "repos/test_simulate_teams.git"
+    url = "{}/{}".format(server.url, upath)
 
     # Dev creates
     dev = testdir.tmpdir.join("dev")
     dev.mkdir()
-    pe.sendline("cd dev")
-    pe.expect(r"bash.*\$")
-    pe.sendline("echo '# New project' > README.md")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git init")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git add -A && git commit -m 'Init'")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git remote add origin {}".format(url))
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config -l")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git push -u origin master")
-    pe.expect("new branch")
-    server.consume_log(["*GET*repos/*200*", "*POST*/repos/*200*"])
-    pe.expect(r"bash.*\$")
+    twofer("cd dev")
+    twofer("echo '# New project' > README.md")
+    twofer("git init")
+    twofer("git add -A && git commit -m 'Init'")
+    twofer("git remote add origin {}".format(url))
+    twofer("git config -l")
+    if create:
+        pe.sendline("git push -u origin master")
+        pe.expect("new branch")
+        server.consume_log(["*GET*/*200*", "*POST*/*200*"])
+        pe.expect(r"bash.*\$")
+    else:
+        clone_rv = server.clone(dev, upath)
+        assert clone_rv == url
+        twofer("git fetch")
+        twofer("git branch -u origin/master master")
     pe.sendline("git ls-remote")
     pe.expect(r"refs/heads/master")
     pe.expect(r"bash.*\$")
@@ -419,10 +429,8 @@ def test_simulate_teams(server, testdir, ssl):
     # Others join
     ops = testdir.tmpdir.join("ops")
     qa = testdir.tmpdir.join("qa")
-    pe.sendline("git clone {} {}".format(url, ops.strpath))
-    pe.expect(r"bash.*\$")
-    pe.sendline("git clone {} {}".format(url, qa.strpath))
-    pe.expect(r"bash.*\$")
+    twofer("git clone {} {}".format(url, ops.strpath))
+    twofer("git clone {} {}".format(url, qa.strpath))
 
     # Develop
     pe.sendline("git checkout -b topic")
@@ -444,24 +452,19 @@ def test_simulate_teams(server, testdir, ssl):
     pe.expect(r"bash.*\$")
 
     # One-off fetching
-    pe.sendline("cd ../ops || exit")
-    pe.expect(r"bash.*\$")
+    twofer("cd ../ops || exit")
     # Note: this is different from master:mymaster, which would create a new
     # local branch named mymaster (remote ref is LHS)
-    pe.sendline("git branch -vr")
-    pe.expect(r"bash.*\$")
+    twofer("git branch -vr")
     pe.sendline("git fetch origin master:refs/remotes/origin/mymaster")
     pe.expect(["master *-> *origin/mymaster",
                "master *-> *origin/master"])
     pe.expect(r"bash.*\$")
-    pe.sendline("git branch -vr")
-    pe.expect(r"bash.*\$")
+    twofer("git branch -vr")
 
     # Dev rewrites shared history
-    pe.sendline("cd %s || exit" % dev.strpath)
-    pe.expect(r"bash.*\$")
-    pe.sendline("echo 'TODO:\n- finish nums' >> README.md")
-    pe.expect(r"bash.*\$")
+    twofer("cd %s || exit" % dev.strpath)
+    twofer("echo 'TODO:\n- finish nums' >> README.md")
     pe.sendline("git add -A && git commit --amend -C @")
     pe.expect("2 files changed")
     pe.expect(r"bash.*\$")
@@ -470,56 +473,42 @@ def test_simulate_teams(server, testdir, ssl):
     pe.expect(r"bash.*\$")
 
     # Rejected fetch
-    pe.sendline("cd %s || exit" % ops.strpath)
-    pe.expect(r"bash.*\$")
+    twofer("cd %s || exit" % ops.strpath)
     pe.sendline("git fetch origin master:refs/remotes/origin/mymaster \\\n"
                 "topic:refs/remotes/origin/topic")
     pe.expect(["rejected", "new branch"])
     pe.expect(r"bash.*\$")
 
     # Pushing refspecs
-    pe.sendline("cd %s || exit" % qa.strpath)
-    pe.expect(r"bash.*\$")
-    pe.sendline("git fetch")
-    pe.expect(r"bash.*\$")
-    pe.sendline("echo 'dist: stable' > .qa-ci.dsl")
-    pe.expect(r"bash.*\$")
+    twofer("cd %s || exit" % qa.strpath)
+    twofer("git fetch")
+    twofer("echo 'dist: stable' > .qa-ci.dsl")
     pe.sendline("git add -A && git commit -m 'add qa-ci config'")
     pe.expect("1 file changed")
     pe.expect(r"bash.*\$")
-    pe.sendline("git config remote.origin.push "
-                "refs/heads/master:refs/heads/qa/master")
-    pe.expect(r"bash.*\$")
+    twofer("git config remote.origin.push "
+           "refs/heads/master:refs/heads/qa/master")
     pe.sendline("git push")
     pe.expect("new branch.*master.*->.*qa/master")
     pe.expect(r"bash.*\$")
-    pe.sendline("git ls-remote --refs")
-    pe.expect(r"bash.*\$")
+    twofer("git ls-remote --refs")
 
     # Multi-valued fetch entry
-    pe.sendline("cd %s || exit" % dev.strpath)
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config remote.origin.fetch "
-                "'+refs/heads/master:refs/remotes/origin/master'")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git config --add remote.origin.fetch "
-                "'+refs/heads/qa/*:refs/remotes/origin/qa/*'")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git fetch")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git show-ref")
-    pe.expect(r"bash.*\$")
-    pe.sendline("git log --oneline --decorate --graph --all")
-    pe.expect(r"bash.*\$")
+    twofer("cd %s || exit" % dev.strpath)
+    twofer("git config remote.origin.fetch "
+           "'+refs/heads/master:refs/remotes/origin/master'")
+    twofer("git config --add remote.origin.fetch "
+           "'+refs/heads/qa/*:refs/remotes/origin/qa/*'")
+    twofer("git fetch")
+    twofer("git show-ref")
+    twofer("git log --oneline --decorate --graph --all")
 
     # Dev deletes topic
-    pe.sendline("git ls-remote --refs")
-    pe.expect(r"bash.*\$")
+    twofer("git ls-remote --refs")
     pe.sendline("git push origin :topic")
     pe.expect("deleted")
     pe.expect(r"bash.*\$")
-    pe.sendline("git ls-remote --refs")
-    pe.expect(r"bash.*\$")
+    twofer("git ls-remote --refs")
 
     pe.sendline("exit")
     pe.expect(EOF)
