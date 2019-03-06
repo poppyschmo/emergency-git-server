@@ -318,7 +318,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self.auth_dict = get_auth_dict(AUTHFILE)
         super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
-    def dlog(self, fmt, *msg, **kwargs):
+    def dlog(self, fmt, **kwargs):
         """ This prints concatenated args and pretty-prints kwargs. It
         uses the ``super().log_message`` method, which just prints to
         stderr without summoning the logging module.
@@ -327,33 +327,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             raise RuntimeError("DEBUG is OFF but dlog called")
         import inspect
         ctx = inspect.stack()[1]
-        if hasattr(ctx, "function"):
-            out = ["%s()" % ctx.function, " - "]
-        else:
-            out = ["%s()" % ctx[3], " - "]
-        #
-        if all(c in fmt for c in "{}"):
-            out.append(fmt.format(*msg))
-        elif any("%%%c" % c in fmt for c in "srcdiouxfFgGXeEa#0- +"):
-            out.append(fmt % msg)
-        elif fmt:
-            out.append(" ".join((fmt,) + msg))
-        else:
-            out.pop()
-        if kwargs.get("locals"):
-            # Can also get class info with:
-            #   ``dict(inspect.getmembers(locs["self"]))``
-            locs = ctx.frame.f_locals
-            for key in kwargs["locals"]:
-                if key.startswith("self"):
-                    # Guess this func's ``self`` doesn't work here?
-                    val = getattr(locs["self"], key.partition("self.")[-1],
-                                  "Error: missing")
-                else:
-                    val = locs.get(key, "Error: missing")
-                kwargs.update({key: val})
-            del kwargs["locals"]
-        #
+        out = ["{}()".format(getattr(ctx, "function") or ctx[3]), " - "]
+        if fmt:
+            out.append(fmt)
         if kwargs:
             maxlen = max(len(k) for k in kwargs) + 1
             out += ["\n{:2}{:<{w}} {!r}".format("", k + ":", v, w=maxlen) for
@@ -513,6 +489,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             if msg is not None:
                 self.send_error(HTTPStatus.FORBIDDEN, msg)
                 # Raise exception so msg is prominent in server-side logs
+                # FIXME do not use ValueError here
+                # FIXME just print msg and use short desc as exc value
                 raise ValueError(msg)  # no ConnectionError in 2.7
             elif mutate_path is True:
                 # Nest everything by a level (break out of DOCROOT)
@@ -829,9 +807,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         repo_uri = root + '/' + repo
         repo_abs = self.translate_path(repo_uri)
         #
-        DEBUG and self.dlog("enter", **dict(
-            item for item in locals().items() if item[0] in
-            ('root', 'rest') or item[0].startswith('repo')))
+        DEBUG and self.dlog("enter",
+                            **{k: v for k, v in locals().items() if
+                               k in ('root', 'rest') or k.startswith('repo')})
         #
         if ENFORCE_DOTGIT is True and not repo.endswith('.git'):
             self.send_error(HTTPStatus.FORBIDDEN,

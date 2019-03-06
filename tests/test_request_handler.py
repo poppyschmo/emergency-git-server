@@ -82,79 +82,51 @@ def make_gitroot(tmpdir_factory):
     return str(tmpdir_factory.getbasetemp()), git_root, names
 
 
-def test_dlog(bhstub, capsys, monkeypatch):
+def test_dlog(bhstub, monkeypatch):
     if is_27:
         pytest.skip("3 only")
+
     bh = bhstub
-    bh.dlog.__globals__["DEBUG"] = True
-    fakes = ("localhost", "1/Jan/1970 00:00:00")
+    bh.dlog.__globals__["DEBUG"] = True  # <- the hell? disturbing
+    capped = []
 
-    def mock_as():
-        return fakes[0]
+    def log_message(s):
+        return capped.append(s)
 
-    def mock_ldts():
-        return fakes[1]
-
-    monkeypatch.setattr(bh, "address_string", mock_as)
-    monkeypatch.setattr(bh, "log_date_time_string", mock_ldts)
+    monkeypatch.setattr(bh, "log_message", log_message)
 
     def f():
         bh.dlog("foo")
 
     f()
-    output = capsys.readouterr()[1].rstrip()
-    assert output == "%s - - [%s] f() - foo" % fakes
+    output = capped.pop()
+    assert output == "f() - foo"
 
     bh.dlog("")
-    fmtstr = "%s - - [%s]" % fakes
-    fmtstr += " test_dlog()%s"
-    output = capsys.readouterr()[1].rstrip()
-    assert output == fmtstr % ""
+    fmtstr = "test_dlog() - "
+    assert capped.pop() == fmtstr
 
-    bh.dlog("bh is: %s", bh)
-    output = capsys.readouterr()[1].rstrip()
-    assert output == fmtstr % (" - bh is: " + repr(bh))
+    bh.dlog("some kwargs:", foo=1, bar=2, baz=3)
+    output = capped.pop()
+    assert all(s in output for s in "foo: bar: baz: 1 2 3".split())
 
-    bh.dlog("bh is: {}", bh)
-    output = capsys.readouterr()[1].rstrip()
-    assert output == fmtstr % (" - bh is: " + repr(bh))
-
-    def fkv(**kwargs):
-        maxlen = max(len(k) for k in kwargs) + 1
-        return "".join(("\n{:2}{:<{w}} {!r}".format("", k + ":", v, w=maxlen)
-                        for k, v in kwargs.items()))
-
-    foo, bar, baz = range(3)
-    kw = dict(foo=foo, bar=bar, baz=baz)
-    bh.dlog("some kwargs:", **kw)
-    output = capsys.readouterr()[1].rstrip()
-    assert output == fmtstr % (" - some kwargs:" + fkv(**kw))
-
-    bh.dlog("auto kwargs:", locals="foo bar baz".split())
-    output = capsys.readouterr()[1].rstrip()
-    assert output == fmtstr % (" - auto kwargs:" + fkv(**kw))
-
-    bh.dlog("", locals="fakes kw baz".split())
-    output = capsys.readouterr()[1].rstrip()
-    assert output == fmtstr % fkv(fakes=fakes, kw=kw, baz=2)
+    import sys
+    if sys.version_info[:2] == (3, 5):
+        return
+    from textwrap import dedent
 
     class Spam(bh.__class__):
-        foo = 0
         bar = 1
 
         def f(self):
-            baz = 2  # noqa
-            self.dlog("auto kwargs:", locals="self.foo self.bar baz".split())
+            baz = 2
+            self.dlog("more kwargs:", **{"self.bar": self.bar, "baz": baz})
 
     spam = Spam()
-    monkeypatch.setattr(spam, "address_string", mock_as)
-    monkeypatch.setattr(spam, "log_date_time_string", mock_ldts)
+    monkeypatch.setattr(spam, "log_message", log_message)
     spam.f()
-    output = capsys.readouterr()[1].rstrip()
-    from textwrap import dedent
-    assert output == dedent("""
-        localhost - - [1/Jan/1970 00:00:00] f() - auto kwargs:
-          self.foo: 0
+    assert capped.pop() == dedent("""
+        f() - more kwargs:
           self.bar: 1
           baz:      2
     """).strip()
