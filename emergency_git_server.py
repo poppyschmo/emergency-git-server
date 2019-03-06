@@ -673,7 +673,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             import base64
             import hashlib
             binpass = saved.partition("{SHA}")[-1].encode()
-            binpass = base64.decodebytes(binpass)
+            binpass = base64.b64decode(binpass)
             if hashlib.sha1(received.encode()).digest() == binpass:
                 return True
         elif len(saved) == 13:
@@ -766,8 +766,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 #
                 try:
                     authorization = authorization[1].encode('ascii')
-                    authorization = base64.decodebytes(
-                                    authorization).decode('ascii')
+                    authorization = base64.b64decode(
+                        authorization).decode('ascii')
                 except (binascii.Error, UnicodeError):
                     pass
                 else:
@@ -1026,7 +1026,7 @@ def validate_logpath(inpath=None, create=False, maxsize=2):
             outpath = inpath
             if os.path.isfile(outpath):
                 outpath += ".new"
-            os.mknod(outpath, mode=0o644)
+            os.mknod(outpath, 0o644)
         else:
             return None
         # If attempting to support Windows, assume Python version >= 3.5
