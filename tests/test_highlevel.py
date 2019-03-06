@@ -18,6 +18,13 @@ from pexpect import EOF
 
 bw_script = os.path.join(os.path.dirname(__file__), "bw.sh")
 
+if os.getenv("TRAVIS"):
+    spawncmd = "env -i - USER=travis HOSTNAME=/home/travis bash %s"
+    is_travis = True
+else:
+    spawncmd = "bash {} %s".format(bw_script)
+    is_travis = False
+
 
 certconf_source = """
 [ req ]
@@ -76,7 +83,7 @@ def get_twofer(child, prompt=prompt_re):
 
 @pytest.fixture
 def server(request, tmpdir_factory):
-    if shutil.which("bwrap") is None:
+    if not is_travis and shutil.which("bwrap") is None:
         pytest.fail("Bubblewrap not installed")
     from time import sleep
 
@@ -256,8 +263,7 @@ def test_basic_errors(server, testdir, create, first, ssl):
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
     server.consume_log(["*Started serving*"])
-    pe = testdir.spawn("bash %s %s" % (bw_script,
-                                       str(testdir.request.config.rootdir)))
+    pe = testdir.spawn(spawncmd % testdir.request.config.rootdir.strpath)
     pe.expect(prompt_re)
     twofer = get_twofer(pe)
     if ssl:
@@ -322,8 +328,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     server.start(**env)
     server.consume_log(["*Started serving*"])
 
-    pe = testdir.spawn("bash %s %s" % (bw_script,
-                                       str(testdir.request.config.rootdir)))
+    pe = testdir.spawn(spawncmd % testdir.request.config.rootdir.strpath)
     twofer = get_twofer(pe)
 
     pe.expect(prompt_re)
@@ -466,8 +471,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     server.start(**env)
     server.consume_log(["*Started serving*"])
 
-    pe = testdir.spawn("bash %s %s" % (bw_script,
-                                       str(testdir.request.config.rootdir)))
+    pe = testdir.spawn(spawncmd % testdir.request.config.rootdir.strpath)
     twofer = get_twofer(pe)
     pe.expect(bash_prompt)
 
