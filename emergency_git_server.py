@@ -340,6 +340,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self.docroot = DOCROOT
         self.git_exec_path = get_libexec_dir()
         self.auth_dict = get_auth_dict(AUTHFILE)
+        self._auth_envars = {}
         super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
     def dlog(self, fmt, **kwargs):
@@ -632,15 +633,16 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 rhs.lstrip("/"))
 
     def verify_pass(self, saved, received):
-        """This attempts to compare a saved hash from the .htpasswd
-        file to the sent password. The only supported formats are unix
-        crypt(3) and sha1. Both args must be strings.
+        """Attempt to compare .htpasswd file entry to the sent password
+
+        The only supported formats are unix crypt(3) and sha1. Both args
+        must be strings.
         """
         if saved.startswith("$apr1") and self.has_openssl is True:
             salt = saved.split("$")[2]
             try:
-                checked = check_output("openssl passwd -apr1 -salt".split() +
-                                       [salt, received])
+                args = ["openssl", "passwd", "-apr1", "-salt", salt, received]
+                checked = check_output(args)
             except CalledProcessError:
                 self.has_openssl = False
             else:
@@ -659,27 +661,66 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 return True
         return False
 
-    # XXX shouldn't auth be checked for all verbs when path is present?
-    def send_head(self):
-        """Check auth-related GET or HEAD requests, call super
+    def get_passwd_info(self, lines):
+        """Return dict of user/password k/v pairs
 
-        This just delegates to the original when (1) authorization
-        doesn't apply to a particular path or (2) credentials check out.
-        Otherwise, it responds with UNAUTHORIZED or FORBIDDEN. The
-        original passes GET requests to the SimpleHTTPRequestHandler,
-        which requires a trailing slash for dirs below DOCROOT, if an
-        html directory listing is to be generated and returned.
-        Otherwise, it responds with a 301 MOVED_PERMANENTLY.
+        ``lines`` are lines from an auth file.
         """
-        if self.cipher:
-            DEBUG and self.dlog("SSL info", cipher=self.cipher)
-        if not self.auth_dict:
-            return super(HTTPBackendHandler, self).send_head()
+        secdict = {}
+        for line in lines:
+            if ':' not in line:
+                continue
+            u, p = line.split(":")
+            if p.startswith("$apr1") and self.has_openssl is None:
+                try:
+                    check_output(("openssl", "version"))
+                except (FileNotFoundError, CalledProcessError):
+                    self.log_error("E: required openssl exe not found")
+                    self.has_openssl = False
+                    raise
+                else:
+                    self.has_openssl = True
+            elif p.startswith("$2y"):
+                # FIXME Python has builtin support for this
+                msg = "bcrypt support requested but not found."
+                self.log_error(msg)
+                raise RuntimeError(msg)
+            secdict[u.strip()] = p.strip()
+        return secdict
 
+    def handle_auth(self, rv):
+        """ Maybe return rv, return False, or raise
+
+        Return rv when (1) authorization doesn't apply to a particular
+        path or (2) credentials check out.  Otherwise, respond with
+        UNAUTHORIZED.
+        """
+        # NOTE: if messing with path, beware that ``send_head`` will eventually
+        # get called for GET and HEAD requests. The base method requires a
+        # trailing slash for dirs below DOCROOT, if an html directory listing
+        # is to be generated and returned.  Otherwise, it responds with a 301
+        # MOVED_PERMANENTLY.
+        self._auth_envars.clear()
+
+        if not self.auth_dict:
+            return rv
+        elif not sys.platform.startswith("linux"):
+            self.log_error("Auth options are Linux only")
+            return rv
+
+        # For GET and HEAD, this should give an fs path on UNIX
         collapsed_path = _url_collapse_path(self.path)
+
+        # Can't continue without knowing the repo path
+        if self.command == "POST":
+            # FIXME this is a joke
+            self.log_error("E: Auth checks not implemented for POST requests")
+            return rv
+
         is_protected = False
         for maybe_restricted_path in self.auth_dict:
             maybe_restricted_path = maybe_restricted_path.rstrip("/")
+            # FIXME use os.commonpath instead
             if (
                 collapsed_path == maybe_restricted_path
                 or collapsed_path.startswith(maybe_restricted_path + "/")
@@ -691,10 +732,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         is_protected = realm_info.get('privaterepo', is_protected)
         if (
             is_protected is False
-            and "service=git-receive-pack" not in collapsed_path
+            and not collapsed_path.endswith("git-receive-pack")
         ):
-            assert "git-upload-pack" in collapsed_path
-            return super(HTTPBackendHandler, self).send_head()
+            assert collapsed_path.endswith("git-upload-pack"), collapsed_path
+            return rv
 
         description = realm_info.get('description', "Basic auth requested")
         # XXX - this option is currently bunk, although it does trigger the
@@ -708,83 +749,72 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             with open(secretsfile) as f:
                 secretlines = f.readlines()
         except TypeError:
-            self.send_error(HTTPStatus.EXPECTATION_FAILED,
-                            "Could not read .htpasswd file")
-            return None
-        else:
-            secdict = {}
-            for line in secretlines:
-                if ':' not in line:
-                    continue
-                u, p = line.split(":")
-                if p.startswith("$apr1") and self.has_openssl is None:
-                    try:
-                        check_output(("openssl", "version"))
-                    except (FileNotFoundError, CalledProcessError):
-                        self.log_error("send_head - Apache md5 support needed"
-                                       " but not found. See usage note.")
-                        self.has_openssl = False
-                        continue
-                    else:
-                        self.has_openssl = True
-                elif p.startswith("$2y"):
-                    # Placeholder for passlib integration
-                    self.log_error("send_head - bcrypt support requested but "
-                                   "not found. See usage note.")
-                    continue
-                secdict.update({u.strip(): p.strip()})
-            del line, u, p
-            # self.dlog("send_head - secdict", **secdict)
+            # Could not read .htpasswd file
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
+                            "Application error looking up auth")
+            return rv
+
+        secdict = self.get_passwd_info(secretlines)
+        # self.dlog("send_head - secdict", **secdict)
         authorization = self.headers.get("authorization")
         #
-        if authorization:
-            DEBUG and self.dlog("auth string sent: %r" % authorization)
-            authorization = authorization.split()
-            if len(authorization) == 2:
-                import base64
-                import binascii
-                os.environ.update(AUTH_TYPE=authorization[0])
-                if authorization[0].lower() != "basic":
-                    self.send_error(HTTPStatus.NOT_ACCEPTABLE,
-                                    "Auth type %r not supported!" %
-                                    authorization[0])
-                    return None
-                #
-                try:
-                    authorization = authorization[1].encode('ascii')
-                    authorization = base64.b64decode(
-                        authorization).decode('ascii')
-                except (binascii.Error, UnicodeError):
-                    pass
-                else:
-                    authorization = authorization.split(':')
-                    DEBUG and self.dlog("processed auth: "
-                                        "{!r}".format(authorization))
-                    if (len(authorization) == 2 and
-                            authorization[0] in secdict and
-                            self.verify_pass(secdict[authorization[0]],
-                                             authorization[1])):
-                        if realaccount:
-                            # FIXME don't update this proc's environment
-                            os.environ.update(REMOTE_USER=authorization[0])
-                        return super(HTTPBackendHandler, self).send_head()
-                    else:
-                        self.send_error(HTTPStatus.FORBIDDEN,
-                                        "Problem authenticating "
-                                        "{!r}".format(authorization[0]))
-                        return None
-            #
-            # Auth string had > 1 space or exception was raised
-            self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
-                            "Problem reading authorization: "
-                            "{!r}".format(authorization[0]))
-            return None
-        else:
+        if not authorization:
             self.send_response(HTTPStatus.UNAUTHORIZED)
             self.send_header("WWW-Authenticate",
                              'Basic realm="%s"' % description)
             self.end_headers()
-            return None
+            self.wfile.flush()
+            return False
+
+        DEBUG and self.dlog("auth string sent: %r" % authorization)
+        authorization = authorization.split()
+
+        try:
+            authtype, authval = authorization
+        except Exception:
+            self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                            "Problem reading authorization")
+            return False
+
+        if authtype.lower() != "basic":
+            msg = "Auth type %r not supported!" % authtype
+            self.send_error(HTTPStatus.NOT_ACCEPTABLE, msg)
+            return False
+
+        self._auth_envars["AUTH_TYPE"] = authtype
+        import base64
+        import binascii
+        try:
+            authorization = base64.b64decode(authval.encode('ascii'))
+            username, password = authorization.decode('ascii').split(':')
+        except (binascii.Error, UnicodeError):
+            pass
+        else:
+            DEBUG and self.dlog("processed auth: {!r}".format(authorization))
+            if self.verify_pass(secdict[username], password):
+                if realaccount:
+                    # FIXME don't update this proc's environment
+                    self._auth_envars["REMOTE_USER"] = username
+                return rv
+            self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
+                            "Problem reading authorization")
+            return False
+
+        self.send_error(HTTPStatus.UNAUTHORIZED, "No permission")
+        return None
+
+    def parse_request(self):
+        """If base method returns True, check auth-related headers
+        """
+        rv = super(HTTPBackendHandler, self).parse_request()
+
+        if rv is not True:
+            return rv
+
+        if self.cipher:  # XXX why is this here?
+            DEBUG and self.dlog("SSL info", cipher=self.cipher)
+
+        return self.handle_auth(rv)
 
     def run_cgi(self):
         """
