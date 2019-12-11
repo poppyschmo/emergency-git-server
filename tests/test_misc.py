@@ -63,3 +63,58 @@ def test_set_ssl_context(tmpdir):
 
     with pytest.raises(RuntimeError):
         assert set_ssl_context(certfile.strpath, None, None)
+
+
+@pytest.fixture
+def safe_debug():
+    import emergency_git_server
+    exists = True
+    if hasattr(emergency_git_server, "DEBUG"):
+        orig = emergency_git_server.DEBUG
+    else:
+        exists = False
+    try:
+        yield
+    finally:
+        if exists:
+            emergency_git_server.DEBUG = orig
+        else:
+            del emergency_git_server.DEBUG
+
+
+def test_dlog(safe_debug):
+    from conftest import is_27
+    import emergency_git_server
+
+    class Fake(object):
+        last = None
+        dlog = emergency_git_server.HTTPBackendHandler.dlog
+        if is_27:
+            def __init__(self):
+                self.dlog = Fake.dlog.__get__(self)
+
+        def log_message(self, thing):
+            self.last = thing
+
+    fake = Fake()
+    with pytest.raises(NameError):
+        fake.dlog("foo")
+
+    emergency_git_server.DEBUG = False
+    with pytest.raises(RuntimeError):
+        fake.dlog("foo")
+
+    emergency_git_server.DEBUG = True
+    fake.dlog("foo")
+    assert fake.last == "test_dlog() - foo"
+
+    spam = "abc"
+    something = 1
+
+    fake.dlog("bar", spam=spam, something=something)
+    from textwrap import dedent
+    assert dedent("""
+        test_dlog() - bar
+          spam:      'abc'
+          something: 1
+    """).strip() == fake.last

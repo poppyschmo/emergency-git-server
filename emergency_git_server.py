@@ -462,18 +462,17 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self._auth_envars = {}
         super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
-    def dlog(self, fmt, **kwargs):
+    def dlog(self, heading, **kwargs):
         """ This prints concatenated args and pretty-prints kwargs. It
         uses the ``super().log_message`` method, which just prints to
         stderr without summoning the logging module.
         """
         if not DEBUG:
             raise RuntimeError("DEBUG is OFF but dlog called")
-        import inspect
-        ctx = inspect.stack()[1]
-        out = ["{}()".format(getattr(ctx, "function") or ctx[3]), " - "]
-        if fmt:
-            out.append(fmt)
+        caller = sys._getframe().f_back.f_code.co_name
+        out = ["{}()".format(caller), " - "]
+        if heading:
+            out.append(heading)
         if kwargs:
             maxlen = max(len(k) for k in kwargs) + 1
             out += ["\n{:2}{:<{w}} {!r}".format("", k + ":", v, w=maxlen) for
