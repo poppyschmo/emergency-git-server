@@ -116,4 +116,10 @@ def test_dlog(safe_debug):
           spam:      'abc'
           something: 1
     """
-    assert dedent(src).strip() == fake.last
+    if is_27:
+        src1 = dedent(src).strip()
+        a, b, c = src1.splitlines()
+        src2 = "\n".join([a, c, b])
+        assert fake.last in (src1, src2)
+    else:
+        assert dedent(src).strip() == fake.last
