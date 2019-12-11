@@ -155,31 +155,12 @@ two environment variables::
 # See <https://docs.python.org/3.5/license.html> for details.
 #
 #
-# WARNING: this code is complete garbage
-#
-# Yeah, it works, but it's garbage.  To discourage general use, tagged releases
-# will not be issued, nor will any CI badge appear in the long description.
-# Any notes on a possible do-over will appear just below. In the meantime, PM
-# if you'd like your own (portable, non-garbage) server-in-a-box mentioned in
-# the README.  Apologies for polluting PyPI with yet another "my first IDLE
-# program"!
-#
-#
-# March 2019
-#
-# - While this script isn't really worth salvaging, it may be supplemented with
-#   or replaced by a mini library of helpers that do things like return the
-#   path to be rewritten or env vars that need exporting or the command-line to
-#   be spawned, etc.
-#
-# - Perhaps included will be some kind of entry point or launcher to complement
-#   aiohttp or similar
-#
+# WARNING: the semi-reliable but unreadable master branch has been replaced by
+# a less disgusting but still pretty yuck dev branch; many things that used to
+# work are probably broken. To revert, go for version 0.0.8.
 #
 # TODO All HTTPStatus codes are naively assigned and largely misapplied. Use
 # official IANA RFC when revising.
-# TODO clarify path-translation behavior via unit tests, then decouple
-# TODO feature: offer command-line options in addition to environment variables
 
 from __future__ import print_function
 from __future__ import unicode_literals
@@ -299,7 +280,11 @@ def _find_namespaces(env, config):
 
 
 def determine_env_vars(docroot, verb, uri, **config):
-    """Return dict of env vars needed by git-http-backend"""
+    """Return dict of env vars needed by git-http-backend
+
+    Note: this function was machine-generated and cleaned up slightly.
+    It's not worth trying to understand. Best treat it like a black box.
+    """
     assert docroot.startswith("/") and not docroot.endswith("/")
     gitroot = find_git_root(docroot, uri)
     assert not gitroot.startswith("/")
