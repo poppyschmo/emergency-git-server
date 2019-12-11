@@ -86,8 +86,7 @@ def collect_picks(*picks, include_all=False):
                 if tag == "envvars":
                     assert "env" not in entry
                     entry.update(
-                        {k: v.replace(docroot, "{docroot}")
-                         .replace("test_", "")
+                        {k: v.replace(docroot, "$DOCROOT").replace("test_", "")
                          for k, v in call["kwargs"].items() if k in envvars}
                     )
                     ns = call["kwargs"].get("GIT_NAMESPACE")
@@ -100,6 +99,14 @@ def collect_picks(*picks, include_all=False):
                     docroot = entry = None
 
     return collected
+
+
+def save_as_json(path):
+    import json
+    from dumper import collect_picks, find_last_picks
+    collected = collect_picks(*find_last_picks())
+    with open(path, "w") as flow:
+        json.dump(collected, flow)
 
 
 if __name__ == "__main__":
