@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 r"""Usage::
-
+
     python3 emergency_git_server.py [DOCROOT]
 
         DOCROOT
@@ -89,7 +89,7 @@ r"""Usage::
 
         _DHPARAMS <path>
             Path to an optional DH parameter file, also in PEM format.
-
+
 
 Notes
 -----
@@ -162,7 +162,8 @@ two environment variables::
 .. _git-http-backend: https://github.com/git/git
    /Documentation/git-http-backend.txt
 
-"""
+"""  # ^~~~ contains hidden form-feed (0x0c FF) chars around usage section
+
 # Author: Jane Soko
 # License: Apache License 2.0
 # Portions derived from Python modules may apply other terms.
@@ -1327,14 +1328,12 @@ def main(**overrides):
     global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, ENFORCE_DOTGIT, \
         CREATE_MISSING, FIRST_CHILD_OK, USE_NAMESPACES, REQURE_ACCOUNT
 
-    if sys.version_info < (3, 5) and list(sys.version_info)[:2] != [2, 7]:
-        print("WARNING: untested on Python versions < 3.5, except for 2.7",
+    if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
+        print("WARNING: untried on Python versions < 3.5, except for 2.7",
               file=sys.stderr)
-    #
-    if len(sys.argv) > 1 and sys.argv[1].lstrip("-") in ("help", "h"):
-        print("\n".join(l[4:] for l in
-                        __doc__.split("Notes\n")[0].splitlines() if
-                        not l.endswith("::")))
+
+    if any(a.lstrip("-") in ("help", "h") for a in sys.argv[1:]):
+        print(__doc__.split("\x0c")[1])  # long, autouse pager?
         return
 
     # Real, local path exposed by server as '/'. Full dereferencing with
