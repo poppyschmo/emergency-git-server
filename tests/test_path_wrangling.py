@@ -155,3 +155,25 @@ def test_url_collapse_path(vs, query, frag):
         assert re.match(r"^//[^/].+", them)
     else:
         assert re.match(r"^/[^/].+", them)
+
+
+@pytest.mark.parametrize(
+    "gitroot", ["foo", "foo/bar"]
+)
+@pytest.mark.parametrize(
+    "extra", ["", "?service=git-upload-pack", "/git-upload-pack"]
+)
+def test_find_git_root(tmpdir, gitroot, extra):
+    from emergency_git_server import find_git_root
+
+    tmpdir.chdir()
+    absgr = tmpdir / gitroot
+    absgr.ensure(dir=True)
+
+    repo = absgr / "repo.git"
+    repo.mkdir()
+    (repo / "refs/heads/master").ensure()
+
+    path = "/%s/repo.git%s" % (gitroot, extra)
+    result = find_git_root(tmpdir.strpath, path)
+    assert result == gitroot

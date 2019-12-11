@@ -274,14 +274,15 @@ def is_repo(abspath):
     return False
 
 
-def find_git_root(docroot, uri):
-    """Return subpath below docroot and above uri"""
+def find_git_root(docroot, target):
+    """Return relative subpath below docroot and above target"""
     out = []
-    for part in iter(uri.split("/")):
+    for part in target.split("/"):
         if not part:
             continue
-        maybe = os.path.join(docroot, part)
-        if not os.path.exists(maybe):
+        sofar = os.path.join(docroot, *out)
+        maybe = os.path.join(sofar, part)  # 27 can't do: *foo, bar
+        if not os.path.exists(maybe):  # skip phantom ns components
             continue
         if is_repo(maybe):
             break
@@ -308,23 +309,26 @@ def _find_namespaces(env, config):
     env["PATH_INFO"] = "/".join(["", part] + parts)
 
 
-def determine_env_vars(docroot, verb, uri, **config):
+def determine_env_vars(docroot, verb, target, **config):
     """Return dict of env vars needed by git-http-backend
 
-    Note: this function was machine-generated and cleaned up slightly.
-    It's not worth trying to understand. Best treat it like a black box.
+    Assume target is in "origin-form" as described by
+    https://tools.ietf.org/html/rfc7230#section-5.3.1
+
+    Note: this function was machine-generated and cleaned up. It's
+    not worth trying to follow; just treat it like a black box.
     """
     assert docroot.startswith("/") and not docroot.endswith("/")
-    gitroot = find_git_root(docroot, uri)
+    gitroot = find_git_root(docroot, target)
     assert not gitroot.startswith("/")
-    assert uri.lstrip("/").startswith(gitroot), locals()
+    assert target.lstrip("/").startswith(gitroot), locals()
     env = {}
     env["GIT_PROJECT_ROOT"] = (
         os.path.join(docroot, gitroot) if gitroot else docroot
     )
     assert not env["GIT_PROJECT_ROOT"].endswith("/"), locals()
 
-    path, maybe_qmark, query = uri.partition("?")
+    path, maybe_qmark, query = target.partition("?")
     if verb == "GET":
         assert maybe_qmark == "?"
         env["QUERY_STRING"] = query
@@ -571,8 +575,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         Return True if successful, False otherwise.
 
         Intervening path components are created if they don't already
-        exist. URI must not contain non-path components, like queries.
-        Dropped when content-length is not 6 (for ``init=1``).
+        exist.
         """
         assert self.path.endswith(".git") and len(self.path) > 5
 
@@ -802,7 +805,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         result = {}
         try:
             result = determine_env_vars(
-                self.docroot, verb=self.command, uri=self.path, **config
+                self.docroot, verb=self.command, target=self.path, **config
             )
         except Exception:
             self.log_exception("E: Problem parsing path")
