@@ -659,8 +659,11 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 return True
         return False
 
+    # XXX shouldn't auth be checked for all verbs when path is present?
     def send_head(self):
-        """This version delegates to the original when (1) authorization
+        """Check auth-related GET or HEAD requests, call super
+
+        This just delegates to the original when (1) authorization
         doesn't apply to a particular path or (2) credentials check out.
         Otherwise, it responds with UNAUTHORIZED or FORBIDDEN. The
         original passes GET requests to the SimpleHTTPRequestHandler,
@@ -672,21 +675,27 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             DEBUG and self.dlog("SSL info", cipher=self.cipher)
         if not self.auth_dict:
             return super(HTTPBackendHandler, self).send_head()
-        #
+
         collapsed_path = _url_collapse_path(self.path)
         is_protected = False
-        # XXX iter var name too long, need below
-        for restricted_path in self.auth_dict:
-            if (collapsed_path.startswith(restricted_path.rstrip("/") + "/") or
-                    collapsed_path == restricted_path.rstrip("/")):
+        for maybe_restricted_path in self.auth_dict:
+            maybe_restricted_path = maybe_restricted_path.rstrip("/")
+            if (
+                collapsed_path == maybe_restricted_path
+                or collapsed_path.startswith(maybe_restricted_path + "/")
+            ):
                 is_protected = True
                 break
-        # This is just the entry for the path; unrelated to "description" field
-        realm_info = self.auth_dict[restricted_path]
-        privaterepo = realm_info.get('privaterepo', False)
-        if (is_protected is False or privaterepo is False and
-                "service=git-receive-pack" not in collapsed_path):
+        # Also asserts record exists
+        realm_info = self.auth_dict[maybe_restricted_path]
+        is_protected = realm_info.get('privaterepo', is_protected)
+        if (
+            is_protected is False
+            and "service=git-receive-pack" not in collapsed_path
+        ):
+            assert "git-upload-pack" in collapsed_path
             return super(HTTPBackendHandler, self).send_head()
+
         description = realm_info.get('description', "Basic auth requested")
         # XXX - this option is currently bunk, although it does trigger the
         # exporting of REMOTE_USER below, which the git exes seem to ignore.
