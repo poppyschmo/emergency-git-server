@@ -288,8 +288,9 @@ def _find_namespaces(env, config):
     for part in parts:
         if not part:
             continue
+        # TODO drop ENFORCE_DOTGIT option, make True always
         if (
-            (config.get("ENFORCE_DOTGIT") and part.endswith(".git"))
+            (config.get("ENFORCE_DOTGIT") is not False and part.endswith(".git"))
             or is_repo(os.path.join(env["GIT_PROJECT_ROOT"], part))
         ):
             break
