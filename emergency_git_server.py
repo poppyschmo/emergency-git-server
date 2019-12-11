@@ -10,7 +10,7 @@
             in dot git, e.g., /var/www/html/repos/foo.git
 
 
-    Environment variables - all are unset by default
+    Environment options:
 
         GITSRV_PREFIX <str>
             Prefix for the following env vars; defaults to _ (shown)
@@ -29,8 +29,8 @@
             Print verbose logging info for every request/response
 
         _ALLOW_CREATION
-            Allow initializing of bare repo via POST.  Response is 201
-            on success::
+            Allow initializing of bare repo via POST; defaults to true.
+            Response is 201 on success::
 
             $ curl --data init=1 http://localhost:8000/git_root/myrepo.git
 
@@ -78,8 +78,8 @@ strongly discouraged, not least because of a total lack of attention paid to
 matters of security and performance.
 
 While it's possible, say, to run this behind a reverse proxy for more legit
-auth/auth and TLS, at that point, you might as well go for cgit, GitLab, etc.,
-which are all just a ``docker-run`` away.
+auth/auth and TLS, it's better to opt for a real server like cgit, which is
+just a ``docker-run`` away.
 
 
 Dealing with git-http-backend
@@ -104,7 +104,7 @@ tail-only (basename) version in ``$SCRIPT_NAME``, which would expand to
 
     $DOCROOT/git_root
 
-... where ``$DOCROOT`` is something like ``/var/www`` and ``git_root`` the
+where ``$DOCROOT`` is something like ``/var/www`` and ``git_root`` the
 intermediate dirs between ``$DOCROOT`` and the Git repo. The only real
 difference between forms (1) and (2) lies in how they impact the value of
 two environment variables::
@@ -128,10 +128,10 @@ two environment variables::
 # Portions derived from Python modules may apply other terms.
 # See <https://docs.python.org/3.5/license.html> for details.
 #
+# TODO remove USE_NAMESPACES in favor of a namespace=foo field for
+# repo-init requests (creating an empty refs/namespaces directory)
 #
-# WARNING: the semi-reliable but unreadable master branch has been replaced by
-# a less disgusting but still pretty yuck dev branch; many things that used to
-# work are probably broken. To revert, go for version 0.0.8.
+# TODO simplify auth handling and follow web standards
 #
 # TODO All HTTPStatus codes are naively assigned and largely misapplied. Use
 # official IANA RFC when revising.
@@ -577,37 +577,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         If user wishes to restrict GET requests to git ops only,
         collapsed path must match regexp
 
-        Namespaces
-        ----------
-        Initial cloning from a remote repo with existing namespaces
-        takes some extra setup, which is another way of saying
-        something's broken here.  When including an existing namespace
-        as the repo's prefix in the url arg to ``git clone``, this
-        warning appears: ``warning: remote HEAD refers to nonexistent
-        ref, unable to checkout.`` And the cloned work tree is empty
-        until issuing a ``git pull origin master``.
-
-        Upon updating ``remote.origin.url`` with a new namespace prefix,
-        and pushing, everything seems okay. The remote HEAD is even
-        updated to point to the new namespaced ref. It's as if ``git
-        symbolic-ref`` were issued manually on the server side.
-
-        When cloning without any (existing) namespace prefixing the repo
-        component of the url, a familiar refrain appears::
-
-            Note: checking out '2641d08..'
-            You are in 'detached HEAD' state. You can look around ...
-            ...
-            git checkout -b <new-branch-name>
-
-        And ``status`` says ``not on any branch``. Checking out master
-        without the ``-b`` miraculously puts everything in sync. After
-        updating the remote url and issuing a ``push -u origin master``,
-        the new namespace is created successfully on the remote.
-
-        Update 1. -- it seems most of the above only applies to remotes
-        that were initialized without the normal refs/heads/master but
-        whose HEAD still pointed thus before being pushed to.
         """
 
         if self.git_env:

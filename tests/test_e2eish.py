@@ -2,6 +2,38 @@
 As noted elsewhere, the author now considers this project absolute garbage.
 This module may help some future person writing their own server validate
 expected behavior for common use cases.
+
+
+Old namespace issue
+-------------------
+When including an existing namespace as the repo's prefix in the url arg to
+``git-clone``, this warning appears: ``warning: remote HEAD refers to
+nonexistent ref, unable to checkout.`` The cloned work tree is empty until
+issuing a ``git pull origin master``.
+
+Upon updating ``remote.origin.url`` with a new namespace prefix, and pushing,
+everything seems okay. The remote HEAD is even updated to point to the new
+namespaced ref.
+
+When cloning without any (existing) namespace prefixing the repo component of
+the url, a familiar refrain appears::
+
+    Note: checking out '2641d08..'
+    You are in 'detached HEAD' state. You can look around ...
+    ...
+    git checkout -b <new-branch-name>
+
+And ``status`` says ``not on any branch``. But, checking out master without the
+``-b`` fixes everything. After updating the remote url and issuing a ``push -u
+origin master``, the new namespace is created successfully on the remote.
+
+Update 1. -- it seems most of the above only applies to remotes that were
+initialized without the normal refs/heads/master but whose HEAD still pointed
+thus before being pushed to.
+
+This may have arisen from a fundamental misunderstanding of how namespaces are
+supposed to work.
+
 """
 import os
 import re
