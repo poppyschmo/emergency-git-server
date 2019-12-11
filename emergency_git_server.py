@@ -6,8 +6,8 @@ r"""Usage::
 
         DOCROOT
             Path to root URI exposed by server, commonly /var/www/html;
-            defaults to current working directory; repos must reside at
-            least two levels below this, e.g., /var/www/html/1/repo.git
+            defaults to current working directory; repo names must end
+            in dot git, e.g., /var/www/html/repos/foo.git
 
 
     Environment variables - all are unset by default
@@ -29,17 +29,14 @@ r"""Usage::
         _DEBUG
             Print verbose logging info for every request/response
 
-        _ENFORCE_DOTGIT
-            Existing or newly initialized repos must end in .git (on the
-            server side)
-
         _ALLOW_CREATION
             Allow initializing of bare repo via POST.  Response is 201
             on success::
 
             $ curl --data init=1 http://localhost:8000/git_root/myrepo.git
 
-            Note: HEAD is currently left unset.
+            As with existing repos, these must end in ".git".  Note: HEAD is
+            currently left unset.
 
         _USE_NAMESPACES
             Interpret non-existent path components between DOCROOT/real
@@ -273,9 +270,8 @@ def _find_namespaces(env, config):
     for part in parts:
         if not part:
             continue
-        # TODO drop ENFORCE_DOTGIT option, make True always
         if (
-            (config.get("ENFORCE_DOTGIT") is not False and part.endswith(".git"))
+            part.endswith(".git")
             or is_repo(os.path.join(env["GIT_PROJECT_ROOT"], part))
         ):
             break
@@ -311,10 +307,7 @@ def determine_env_vars(docroot, verb, uri, **config):
         repo, exename = os.path.split(path)
         assert exename == "git-receive-pack" or exename == "git-upload-pack"
 
-    if config.get("ENFORCE_DOTGIT") is not False:  # None is True
-        assert any(c.endswith(".git") for c in repo.split("/")), locals()
-    else:
-        assert repo.replace("/info/refs", "").strip("/"), locals()
+    assert any(c.endswith(".git") for c in repo.split("/")), locals()
 
     env["PATH_INFO"] = path.replace("/" + gitroot, "", 1) if gitroot else path
 
@@ -815,7 +808,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
 
         # TODO replace this with actual env vars
         config = {
-            "ENFORCE_DOTGIT": ENFORCE_DOTGIT,
             "USE_NAMESPACES": USE_NAMESPACES
         }
         result = {}
@@ -1143,7 +1135,7 @@ def main(**overrides):
     Overrides should be unprefixed names and native types, e.g. DEBUG=1 not
     _DEBUG="1".
     """
-    global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, ENFORCE_DOTGIT, \
+    global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, \
         ALLOW_CREATION, USE_NAMESPACES, REQURE_ACCOUNT
 
     if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
@@ -1177,9 +1169,6 @@ def main(**overrides):
     ALLOW_CREATION = getvar("ALLOW_CREATION", is_bool=True)
     USE_NAMESPACES = getvar("USE_NAMESPACES", is_bool=True)
     REQURE_ACCOUNT = getvar("REQURE_ACCOUNT", is_bool=True)
-
-    # Deprecations
-    ENFORCE_DOTGIT = True
 
     dep_msg = "\x1b[33;1mWARNING\x1b[m: Option {} is no longer supported."
     for opt in ("ENFORCE_DOTGIT", "FIRST_CHILD_OK", "CREATE_MISSING"):
