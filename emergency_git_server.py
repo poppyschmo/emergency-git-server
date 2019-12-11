@@ -324,7 +324,7 @@ def create_repo_from_uri(abspath):
     Caller should catch exceptions and inform client of success or
     failure.
     """
-    assert abspath.endswith(".git")
+    assert abspath.endswith(".git"), locals()
     try:
         # Assume mode is set according to umask
         os.makedirs(abspath)
@@ -506,6 +506,11 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if hasattr(self, "flush_headers"):
             self.flush_headers()
 
+    def log_exception(self, msg=None):
+        import traceback
+        formatted = traceback.format_exc()
+        self.log_error("%s\n%s" % (msg, formatted) if msg else formatted)
+
     def maybe_create_repo(self):
         """Init repo if non-cgi POST seems legit
 
@@ -551,8 +556,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
 
         try:
             _stdout = create_repo_from_uri(abspath)
-        except Exception as err:
-            self.log_error("E: %s", str(err))
+        except Exception:
+            self.log_exception("E: Problem creating repo")
             self.send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR, "Problem creating repo"
             )
@@ -657,7 +662,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 secretlines = f.readlines()
             secdict = self._get_htpasswd_info(secretlines)
         except Exception:
-            # Could not read .htpasswd file
+            self.log_exception("E: Problem reading .htpasswd file")
             self.send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Application error looking up auth",
@@ -681,6 +686,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         try:
             authtype, authval = authorization
         except Exception:
+            self.log_exception("E: Problem parsing authorization")
             self.send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Problem reading authorization",
@@ -745,11 +751,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 self.docroot, verb=self.command, uri=self.path, **config
             )
         except Exception:
-            import traceback
-
-            self.log_error(
-                "\n".join(traceback.format_exception(*sys.exc_info()))
-            )
+            self.log_exception("E: Problem parsing path")
             self.send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR, "Problem parsing path"
             )
