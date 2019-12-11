@@ -73,7 +73,6 @@ def test_determine_env_vars(path_data, tmpdir):
             determine_env_vars(docroot, command, uri, **config)
         errlog = (tmpdir / "exception.log")
         errlog.write("\n".join(format_exception(*exc_info._excinfo)))
-        assert config["CREATE_MISSING"] is True
 
         leading = []
         for p in chain.from_iterable(fakes):

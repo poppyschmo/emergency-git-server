@@ -206,6 +206,21 @@ else:
 
 __version__ = "0.0.8"
 
+config = {
+    "DOCROOT": "/tmp/__fake__",
+    "HOST": "localhost",
+    "PORT": 8000,
+    "LOGFILE": None,
+    "AUTHFILE": None,
+    "DEBUG": False,
+    "ALLOW_CREATION": True,
+    "USE_NAMESPACES": False,
+    "REQUIRE_ACCOUNT": False,
+    "CERTFILE": None,
+    "KEYFILE": None,
+    "DHPARAMS": None,
+}
+
 
 def get_libexec_dir():
     """Return path to dir containing Git plumbing exes"""
@@ -367,6 +382,7 @@ def create_repo_from_uri(abspath):
     return check_output(("git", "-C", abspath, "init", "--bare"))
 
 
+# FIXME rename this to SslServer
 class CtxServer(HTTPServer, object):
     """SSL-aware HTTPServer.
 
@@ -412,7 +428,10 @@ class CtxServer(HTTPServer, object):
                         else:
                             raise
                     else:
-                        if DEBUG and self.RequestHandlerClass.cipher is None:
+                        if (
+                            config["DEBUG"]
+                            and self.RequestHandlerClass.cipher is None
+                        ):
                             self.RequestHandlerClass.cipher = request.cipher()
                 self.process_request(request, client_address)
             except Exception:
@@ -449,9 +468,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
     )
 
     def __init__(self, *args, **kwargs):
-        self.docroot = DOCROOT
+        self.docroot = config["DOCROOT"]
         self.git_exec_path = get_libexec_dir()
-        self.auth_dict = get_auth_dict(AUTHFILE)
+        self.auth_dict = get_auth_dict(config["AUTHFILE"])
         self._auth_envars = {}
         super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
@@ -460,7 +479,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         uses the ``super().log_message`` method, which just prints to
         stderr without summoning the logging module.
         """
-        if not DEBUG:
+        if config["DEBUG"] is not True:
             raise RuntimeError("DEBUG is OFF but dlog called")
         caller = sys._getframe().f_back.f_code.co_name
         out = ["{}()".format(caller), " - "]
@@ -515,10 +534,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         request_body = self.consume_and_exhaust()  # -> bytes
 
         abspath = self._joined(self.path)
-        DEBUG and self.dlog('Read content',
-                            request_body=request_body,
-                            abspath=abspath)
-
+        config["DEBUG"] and self.dlog(
+            'Read content', request_body=request_body, abspath=abspath
+        )
         contype = self.headers.get('content-type').lower()
 
         def bail():
@@ -554,7 +572,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             )
             return False
 
-        DEBUG and self.dlog('created new repo', stdout=_stdout)
+        config["DEBUG"] and self.dlog('created new repo', stdout=_stdout)
         self._send_header_only(HTTPStatus.CREATED, "Successfully created repo")
         return True
 
@@ -714,7 +732,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         # If implementing, it would most likely be limited to unix systems
         # with read access to /etc/passwd and /etc/group. The actual modified
         # files would still end up being owned by the server process UID.
-        realaccount = realm_info.get('realaccount', REQURE_ACCOUNT)
+        realaccount = realm_info.get('realaccount', config["REQUIRE_ACCOUNT"])
         try:
             secretsfile = realm_info.get('secretsfile')
             with open(secretsfile) as f:
@@ -737,7 +755,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             self.wfile.flush()
             return False
 
-        DEBUG and self.dlog("auth string sent: %r" % authorization)
+        config["DEBUG"] and self.dlog("auth string sent: %r" % authorization)
         authorization = authorization.split()
 
         try:
@@ -761,7 +779,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         except (binascii.Error, UnicodeError):
             pass
         else:
-            DEBUG and self.dlog("processed auth: {!r}".format(authorization))
+            config["DEBUG"] and self.dlog(
+                "processed auth: {!r}".format(authorization)
+            )
             if self.verify_pass(secdict[username], password):
                 if realaccount:
                     # FIXME don't update this proc's environment
@@ -788,14 +808,14 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             return rv
 
         if self.cipher:  # XXX why is this here?
-            DEBUG and self.dlog("SSL info", cipher=self.cipher)
+            config["DEBUG"] and self.dlog("SSL info", cipher=self.cipher)
 
         # Allow SimpleHTTPRequestHandler to attempt fulfilling
         if not is_ghb_bound(self.command, self.path):
-            if DEBUG:
+            if config["DEBUG"]:
                 out = dict(vars(self))
                 out["headers"] = dict(self.headers._headers)
-            DEBUG and self.dlog("Onetime deal", **out)
+            config["DEBUG"] and self.dlog("Onetime deal", **out)
             authd = self.handle_auth(rv)
             if authd and self.command == "POST":
                 if self.path.endswith(".git"):
@@ -806,10 +826,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 return False
             return authd
 
-        # TODO replace this with actual env vars
-        config = {
-            "USE_NAMESPACES": USE_NAMESPACES
-        }
         result = {}
         try:
             result = determine_env_vars(
@@ -831,7 +847,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if self.command == "GET":
             assert not self.get_objects_re.match(result["PATH_INFO"])
 
-        DEBUG and self.dlog("Initial parse", result=result)
+        config["DEBUG"] and self.dlog("Initial parse", result=result)
         self.git_env = result
 
         # TODO use git_env in auth
@@ -919,7 +935,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if cookie_str:
             env['HTTP_COOKIE'] = cookie_str
         #
-        DEBUG and self.dlog("headers", **self.headers)
+        config["DEBUG"] and self.dlog("headers", **self.headers)
 
         # XXX Other HTTP_* headers
         # Since we're setting the env in the parent, provide empty
@@ -930,7 +946,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             env.setdefault(k, "")
 
         # Env vars required by ``git-http-backend`` and/or rfc3875
-        if DEBUG:
+        if config["DEBUG"]:
             _prees = ("QUERY_", "PATH_", "GIT_", "REMOTE_")
             _keys = (
                 k for k in env if k in rfcvars or
@@ -960,7 +976,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if status:
             self.log_error("CGI script exit status %#x", status)
         else:
-            DEBUG and self.dlog("CGI script exited OK")
+            config["DEBUG"] and self.dlog("CGI script exited OK")
 
         # See note in docstring re GnuTLS and Content-Length
         hdr, _, payload = stdout.partition(b"\r\n\r\n")
@@ -1024,7 +1040,9 @@ def serve(server_class, name="Git services", context=None):
     """
     from time import strftime
     #
-    server = server_class((HOST, PORT), HTTPBackendHandler, context)
+    server = server_class(
+        (config["HOST"], config["PORT"]), HTTPBackendHandler, context
+    )
     #
     register_signals(server, ("TERM", "HUP", "INT"), ("TSTP", "TTOU", "TTIN"))
     #
@@ -1037,7 +1055,7 @@ def serve(server_class, name="Git services", context=None):
           file=sys.stderr)
     print("{} - - [{}] PID: {}, PPID: {}".format(
         host, strftime(time_fmt), os.getpid(), os.getppid()), file=sys.stderr)
-    if not LOGFILE:
+    if not config["LOGFILE"]:
         print("\n{}\n".format("Hit Ctrl-C to exit."), file=sys.stderr)
     sys.stderr.flush()
     #
@@ -1131,13 +1149,12 @@ def _boolify_envvar(val):
 
 
 def main(**overrides):
-    """Set globals from environment and call serve().
-    Overrides should be unprefixed names and native types, e.g. DEBUG=1 not
-    _DEBUG="1".
-    """
-    global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, \
-        ALLOW_CREATION, USE_NAMESPACES, REQURE_ACCOUNT
+    """Set globals from environment and call serve()
 
+    Overrides should be unprefixed names and native types, e.g. DEBUG=1
+    not _DEBUG="1".
+
+    """
     if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
         print("WARNING: untried on Python versions < 3.5, except for 2.7",
               file=sys.stderr)
@@ -1148,28 +1165,27 @@ def main(**overrides):
 
     # Real, local path exposed by server as '/'. Full dereferencing with
     # os.path.realpath() might not be desirable in some situations.
-    DOCROOT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 and
-                              os.path.isdir(sys.argv[1]) else ".")
+    config["DOCROOT"] = os.path.abspath(
+        sys.argv[1]
+        if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else "."
+    )
 
+    # Options
     envvar_prefix = os.getenv("GITSRV_PREFIX", "_")
-    absent = object()
+    config.update(overrides)
 
-    def getvar(var, is_bool=False):
-        got = overrides.get(var, absent)
-        if got is not absent:
-            return got
-        val = os.getenv("{}{}".format(envvar_prefix, var))
-        return _boolify_envvar(val) if is_bool else val
+    for key, value in list(config.items()):
+        if key in overrides:
+            continue
+        fixed = "{}{}".format(envvar_prefix, key)
+        if fixed in os.environ:
+            val = os.getenv(fixed)
+            if isinstance(value, bool):
+                config[key] = _boolify_envvar(val)
+            else:
+                config[key] = type(value)(val) if value is not None else val
 
-    HOST = getvar("HOST") or "localhost"
-    PORT = getvar("PORT")
-    LOGFILE = getvar("LOGFILE")
-    AUTHFILE = getvar("AUTHFILE")
-    DEBUG = getvar("DEBUG", is_bool=True)
-    ALLOW_CREATION = getvar("ALLOW_CREATION", is_bool=True)
-    USE_NAMESPACES = getvar("USE_NAMESPACES", is_bool=True)
-    REQURE_ACCOUNT = getvar("REQURE_ACCOUNT", is_bool=True)
-
+    # Deprecations
     dep_msg = "\x1b[33;1mWARNING\x1b[m: Option {} is no longer supported."
     for opt in ("ENFORCE_DOTGIT", "FIRST_CHILD_OK", "CREATE_MISSING"):
         name = "{}{}".format(envvar_prefix, opt)
@@ -1181,17 +1197,16 @@ def main(**overrides):
             print(dep_msg.format(opt), msg)
 
     # SSL
-    context = set_ssl_context(certfile=getvar("CERTFILE"),
-                              keyfile=getvar("KEYFILE"),
-                              dhparams=getvar("DHPARAMS"))
-    # If None, could verify free and otherwise increment, but these are
-    # listening/"bind" addresses, so maybe better to just fail
-    if PORT is None:
-        PORT = 4443 if context else 8000
-    else:
-        PORT = int(PORT)
+    context = set_ssl_context(
+        certfile=config["CERTFILE"],
+        keyfile=config["KEYFILE"],
+        dhparams=config["DHPARAMS"]
+    )
 
-    logfile = validate_logpath(LOGFILE, create=True, maxsize=0)
+    if context and config["PORT"] == 8000:
+        config["PORT"] = 4443
+
+    logfile = validate_logpath(config["LOGFILE"], create=True, maxsize=0)
 
     if logfile is None:
         serve(CtxServer, context=context)

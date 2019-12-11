@@ -68,18 +68,11 @@ def test_set_ssl_context(tmpdir):
 @pytest.fixture
 def safe_debug():
     import emergency_git_server
-    exists = True
-    if hasattr(emergency_git_server, "DEBUG"):
-        orig = emergency_git_server.DEBUG
-    else:
-        exists = False
+    orig = emergency_git_server.config["DEBUG"]
     try:
         yield
     finally:
-        if exists:
-            emergency_git_server.DEBUG = orig
-        else:
-            del emergency_git_server.DEBUG
+        emergency_git_server.config["DEBUG"] = orig
 
 
 def test_dlog(safe_debug):
@@ -97,14 +90,12 @@ def test_dlog(safe_debug):
             self.last = thing
 
     fake = Fake()
-    with pytest.raises(NameError):
-        fake.dlog("foo")
 
-    emergency_git_server.DEBUG = False
+    assert emergency_git_server.config["DEBUG"] is False
     with pytest.raises(RuntimeError):
         fake.dlog("foo")
 
-    emergency_git_server.DEBUG = True
+    emergency_git_server.config["DEBUG"] = True
     fake.dlog("foo")
     assert fake.last == "test_dlog() - foo"
 

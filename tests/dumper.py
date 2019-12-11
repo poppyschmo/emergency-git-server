@@ -32,7 +32,8 @@ def collect_picks(*picks, include_all=False):
 
     Return a dict with these keys::
 
-       'command' verb
+       'config': module dict
+       'command': verb
        'path': everything after hostname:port in full URL
        'GIT_PROJECT_ROOT': '{docroot}/rest'
        'PATH_INFO': '/repo.git/...'
@@ -171,16 +172,9 @@ if __name__ == "__main__":
         """Manual patch for handler when dumping data. Noisy."""
         rv = orig_parse_request(inst)
         # print("\n<<<<<<<<<<: %r" % inst.raw_requestline, file=sys.stderr)
-        assert emergency_git_server.ENFORCE_DOTGIT is False
-        assert emergency_git_server.REQURE_ACCOUNT is False
-        config = {
-            "CREATE_MISSING": emergency_git_server.CREATE_MISSING,
-            "FIRST_CHILD_OK": emergency_git_server.FIRST_CHILD_OK,
-            "USE_NAMESPACES": emergency_git_server.USE_NAMESPACES,
-        }
         inst.dlog("parsed",
                   parts=group_parts_by_existence(inst.docroot, inst.path),
-                  config=config,
+                  config=emergency_git_server.config,
                   requestline=inst.requestline,
                   version=inst.request_version,
                   docroot=inst.docroot,
