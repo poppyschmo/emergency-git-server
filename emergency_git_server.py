@@ -33,17 +33,11 @@ r"""Usage::
             Existing or newly initialized repos must end in .git (on the
             server side)
 
-        _CREATE_MISSING
-            Allow cloning and pushing of non-existent repos, like so:
+        _ALLOW_CREATION
+            Allow initializing of bare repo via POST.  Response is 201
+            on success::
 
-            $ git clone http://localhost:8000/git_root/myrepo.git
-
-            or ...
-
-            $ cd existing_repo
-            $ git remote add origin \
-                 http://localhost:8000/git_root/existing_repo.git
-            $ git push -u origin master
+            $ curl --data init=1 http://localhost:8000/git_root/myrepo.git
 
             Note: HEAD is currently left unset.
 
@@ -66,7 +60,7 @@ r"""Usage::
               }, ...
             }
 
-        _REQURE_ACCOUNT (not implemented)
+        _REQUIRE_ACCOUNT (not implemented)
             Enforce a real account policy. Users named in the _AUTHFILE must
             have an existing account on the server. System permission are
             checked before access to files are granted.
@@ -195,22 +189,20 @@ from __future__ import unicode_literals
 from __future__ import division
 from __future__ import absolute_import
 
-import sys
-import copy
 import os
 import re
+import sys
+import json
 import select
 
 from subprocess import check_output, Popen, PIPE, CalledProcessError
 
 if sys.version_info < (3, 0):
     import httplib as HTTPStatus
-    import urlparse
     from future_builtins import filter
     from CGIHTTPServer import CGIHTTPRequestHandler, _url_collapse_path
     from BaseHTTPServer import HTTPServer
 else:
-    import urllib.parse as urlparse
     from http import HTTPStatus
     from http.server import (CGIHTTPRequestHandler, HTTPServer,
                              _url_collapse_path)
@@ -241,7 +233,6 @@ def get_libexec_dir():
 def get_auth_dict(authfile):
     if authfile is None:
         return {}
-    import json
     if os.path.exists(authfile):
         with open(authfile) as f:
             outdict = json.load(f)
@@ -343,6 +334,46 @@ def determine_env_vars(docroot, verb, uri, **config):
     return env
 
 
+def is_ghb_bound(command, path):
+    """Return whether path is destined for git-http-backend"""
+
+    if command == "GET":
+        tails = (
+            "/info/refs?service=git-upload-pack",
+            "/info/refs?service=git-receive-pack"
+        )
+        return any(path.endswith(t) for t in tails)
+
+    assert command == "POST"
+    return any(
+        path.endswith(t) for t in ("git-upload-pack", "git-receive-pack")
+    )
+
+
+def create_repo_from_uri(abspath):
+    """Ensure dirpath and call git-init
+
+    Caller should catch exceptions and inform client of success or
+    failure.
+    """
+    assert abspath.endswith(".git")
+    try:
+        # Assume mode is set according to umask
+        os.makedirs(abspath)
+    except Exception as err:
+        try:
+            if not isinstance(err, FileExistsError):
+                raise
+        except NameError:  # 2.7
+            if not isinstance(err, OSError) or err.errno != os.errno.EEXIST:
+                raise
+    # See notes on evolving meaning of os.makedirs kwarg exist_ok
+    # https://docs.python.org/3.8/library/os.html#os.makedirs
+    if len(os.listdir(abspath)) != 0:
+        raise RuntimeError("Leaf not empty: %s" % abspath)
+    return check_output(("git", "-C", abspath, "init", "--bare"))
+
+
 class CtxServer(HTTPServer, object):
     """SSL-aware HTTPServer.
 
@@ -408,7 +439,7 @@ class CtxServer(HTTPServer, object):
             self.service_actions()
 
 
-class HTTPBackendHandler(CGIHTTPRequestHandler):
+class HTTPBackendHandler(CGIHTTPRequestHandler, object):
     """The included CGI handler from the standard library needs a bit of
     massaging to play nice with git-http-backend(1). See the main module's
     __doc__ for details.
@@ -419,9 +450,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
     git_exec_path = None
     has_openssl = None
     cipher = None
-    get_re = re.compile(r'^/.+/objects/'
-                        r'(pack/pack-[0-9a-f]{40}\.(pack|idx)|'
-                        r'[0-9a-f]{2}/[0-9a-f]{38})$')
+    get_objects_re = re.compile(
+        r"^/.+/objects/"
+        r"(pack/pack-[0-9a-f]{40}\.(pack|idx)|[0-9a-f]{2}/[0-9a-f]{38})$"
+    )
 
     def __init__(self, *args, **kwargs):
         self.docroot = DOCROOT
@@ -450,12 +482,97 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         # concat, then disregard entirely. A stray ``%s`` shouldn't bother.
         self.log_message("".join(out))
 
+    def consume_and_exhaust(self, length=None):
+        """Return up to length bytes from remote and discard the rest.
+        """
+        if length is None:
+            length = int(self.headers.get('content-length'))
+        data = self.rfile.read(length)
+        # Bad content-length? (see comment in CGIHTTPRequestHandler.run_cgi)
+        while select.select([self.rfile._sock], [], [], 0)[0]:
+            if not self.rfile._sock.recv(1):
+                break
+        return data
+
+    def _joined(self, path):
+        abspath = os.path.normpath(
+            os.path.join(self.docroot, path.strip("/"))
+        )
+        compre = os.path.commonprefix([self.docroot, abspath])
+        assert compre == self.docroot, locals()
+        return abspath
+
+    def _send_header_only(self, code, message):
+        """Send header with no body"""
+        self.send_response(code, message)
+        self.end_headers()
+        if hasattr(self, "flush_headers"):
+            self.flush_headers()
+
+    def maybe_create_repo(self):
+        """Init repo if non-cgi POST seems legit
+
+        Return True if successful, False otherwise.
+
+        Intervening path components are created if they don't already
+        exist. URI must not contain non-path components, like queries.
+        Dropped when content-length is not 6 (for ``init=1``).
+        """
+        assert self.path.endswith(".git") and len(self.path) > 5
+
+        request_body = self.consume_and_exhaust()  # -> bytes
+
+        abspath = self._joined(self.path)
+        DEBUG and self.dlog('Read content',
+                            request_body=request_body,
+                            abspath=abspath)
+
+        contype = self.headers.get('content-type').lower()
+
+        def bail():
+            if os.path.exists(abspath):
+                msg = (HTTPStatus.BAD_REQUEST, "Invalid content")
+            else:
+                msg = (HTTPStatus.NOT_FOUND, "Repo does not exist")
+            self.send_error(*msg)
+
+        if "json" in contype:
+            data = json.loads(request_body)
+            if data.get("init") != 1:
+                bail()
+                return False
+        if "form" in contype:
+            # pointless
+            if "urlencoded" in contype:
+                try:
+                    from urllib.parse import unquote_plus
+                except ImportError:
+                    from urllib import unquote_plus
+                request_body = unquote_plus(request_body.decode())
+            if "init=1" not in request_body:
+                bail()
+                return False
+
+        try:
+            _stdout = create_repo_from_uri(abspath)
+        except Exception as err:
+            self.log_error("E: %s", str(err))
+            self.send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Problem creating repo"
+            )
+            return False
+
+        DEBUG and self.dlog('created new repo', stdout=_stdout)
+        self._send_header_only(HTTPStatus.CREATED, "Successfully created repo")
+        return True
+
     def is_cgi(self):
-        """This modified version of ``is_cgi`` still performs the same
-        basic function as its Super, but the ancillary ``cgi_info`` var
-        has been renamed to ``repo_info`` to better distinguish between
-        the aliased Git CGI scripts dir (``/usr/libexec/git-core``) and
-        the Git repo itself.
+        """Check if request is destined for git-http-backend
+
+        Return True if caller should call run_cgi, False otherwise
+
+        If user wishes to restrict GET requests to git ops only,
+        collapsed path must match regexp
 
         Namespaces
         ----------
@@ -489,205 +606,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         that were initialized without the normal refs/heads/master but
         whose HEAD still pointed thus before being pushed to.
         """
-        # TODO migrate all parsing business from ``run_cgi()`` up here.  The
-        # basic purpose of this function, which is to split the path into head
-        # and tail components, is redundant because ``run_cgi`` does it again.
-        #
-        # XXX ``SimpleHTTPRequestHandler`` calls ``posixpath.normpath``, which
-        # seems pretty similar to ``http.server._url_collapse_path``. Might be
-        # worth checking out.  Guessing this one has to do with deterring
-        # pardir URI mischief, but not certain.
-        collapsed_path = _url_collapse_path(self.path)
-        git_root, tail = self.find_repo(collapsed_path)
-        # Attempt to accommodate namespaced setups. This must occur before
-        # non-existent dirs are interpreted as "missing."
-        ns = None
-        if USE_NAMESPACES:
-            ns_test = self.find_repo(collapsed_path, allow_fake=True)
-            DEBUG and self.dlog("is_cgi - ns_test:",
-                                USE_NAMESPACES=USE_NAMESPACES,
-                                ns_test=ns_test, git_root=git_root)
-            if ns_test[0] != git_root:
-                git_root, tail = ns_test
-                git_root, ns = self.find_repo(git_root)
-                #
-                # Here, the intent is surely to initialize a new repo.
-                if git_root == "/" and "/" in ns:
-                    ns, tail = None, "/".join((ns, tail))
-                else:
-                    # Rewrite ``self.path`` to help other methods find the repo
-                    self.path = collapsed_path = "/".join(
-                        (git_root.rstrip("/"), tail.lstrip("/"))
-                    )
-        DEBUG and self.dlog("enter", git_root=git_root, ns=ns, tail=tail)
-        if ns and not CREATE_MISSING:
-            assert os.path.exists(
-                os.path.join(
-                    self.docroot, git_root.lstrip("/"), tail.partition("/")[0]
-                )
-            )
 
-        # Disqualify GET requests for static resources in ``$GIT_DIR/objects``.
-        if self.get_re.match(collapsed_path):
-            return False
-        # XXX a temporary catch-all to handle requests for extant paths that
-        # don't resolve to ``$GIT_DIR/objects``. Separating this block from the
-        # RE block above is a lazy way of acknowledging that simply dropping
-        # such requests outright or throwing errors might be preferable to
-        # having ``send_head`` shunt them to ``SimpleHTTPRequestHandler``. Any
-        # such logic, if/when needed, should go here.
-        cgi_cand = os.path.join(self.docroot, collapsed_path.strip('/'))
-        if os.path.exists(cgi_cand):
-            return False
-        #
-        if git_root == "/":
-            # This should only run if all components have yet to be created or
-            # if the topmost (1st child) is an existing repo.
-            #
-            gr_test = self.find_repo(collapsed_path, allow_fake=True)
-            gr_test = self.find_repo(gr_test[0])
-            msg = None
-            mutate_path = False
-            if gr_test[0] == "/" and not is_repo(os.path.join(
-                    self.docroot, tail.lstrip("/").split("/")[0])):
-                # This is for dry clones, so no component can actually exist...
-                #
-                if CREATE_MISSING is False:
-                    # ... and none will be created
-                    msg = "The requested path could not be found " \
-                        "and the env var _CREATE_MISSING is not set"
-                elif ('/info/refs?service=' in tail and '/' not
-                        in tail.split("/info/refs?service=")[0].lstrip("/")):
-                    # A lone, first-child of docroot has been requested
-                    mutate_path = True
-                else:
-                    # Multiple components wanted, so this can fall through.
-                    #
-                    # XXX note this doesn't check for the presence of a
-                    # ``service`` query string or that the method is ``GET``.
-                    pass
-            else:
-                mutate_path = True
-            DEBUG and self.dlog("git_root missing",
-                                gr_test=gr_test,
-                                tail=tail,
-                                mutate_path=mutate_path,
-                                docroot=self.docroot,
-                                collapsed_path=collapsed_path)
-            if msg is not None:
-                self.send_error(HTTPStatus.FORBIDDEN, msg)
-                # Raise exception so msg is prominent in server-side logs
-                # FIXME do not use ValueError here
-                # FIXME just print msg and use short desc as exc value
-                raise ValueError(msg)  # no ConnectionError in 2.7
-            elif mutate_path is True:
-                # Nest everything by a level (break out of DOCROOT)
-                self.docroot, git_root = os.path.split(self.docroot)
-                collapsed_path = '/' + git_root + collapsed_path
-        #
-        dir_sep = collapsed_path.find('/', 1)
-        #
-        # NOTE - this resets everything -- the stuff above merely weeds out the
-        # corner cases.
-        #
-        # ``head`` = 1st component of ``self.path`` w/o trailing slash
-        # ``tail`` = the rest, no leading slash
-        #
-        # This split is only a starting point, or baseline, to allow the
-        # setting of initial values for ``root``, ``repo``, etc.
-        head, tail = collapsed_path[:dir_sep], collapsed_path[dir_sep+1:]
-        #
-        self.repo_info = head, tail, ns
-        #
-        # Attempt to create repo if it doesn't exist; applies to both upload
-        # and receive requests
-        if (CREATE_MISSING is True and '/info/refs?service=' in tail):
-            uri = os.path.join(
-                self.docroot,
-                collapsed_path.split('/info/refs?service=')[0].strip('/'))
-            try:
-                # Assume mode is set according to umask
-                os.makedirs(uri)
-            except Exception as err:
-                try:
-                    if not isinstance(err, FileExistsError):
-                        raise
-                except NameError:
-                    if (not isinstance(err, OSError)
-                            or err.errno != os.errno.EEXIST):  # 2.7
-                        raise
-            # Target repo be empty
-            if len(os.listdir(uri)) == 0:
-                try:
-                    cp = check_output(('git -C %s init --bare' % uri).split())
-                except CalledProcessError as e:
-                    self.log_error('%r', e)
-                else:
-                    DEBUG and self.dlog('created new repo', cp=cp)
-        DEBUG and self.dlog("leave",
-                            **{"collapsed_path": collapsed_path,
-                               "git_root": self.find_repo(collapsed_path)[0],
-                               "cgi_cand": cgi_cand,
-                               "self.repo_info": self.repo_info,
-                               "returned": True})
-        return True
-
-    def translate_path(self, path):
-        """This extension simply ensures that the curdir is docroot, which is
-        assumed by the base method.
-        """
-        # XXX unclear whether this block is a bug. Assuming it was added for a
-        # reason. While ``os.chdir()`` can result in a ``FileNotFoundError``,
-        # and chdir(3) lists some ``ENO*`` errors on its man page, getcwd(3)
-        # does not.
-        try:
-            thisdir = os.getcwd()
-        except FileNotFoundError:
-            # Is this a intentional? Seems ``is_cgi`` may rewrite self.docroot
-            thisdir = DOCROOT
-            DEBUG and self.dlog("call to os.getcwd() failed")
-        os.chdir(self.docroot)
-        if hasattr(self, "directory"):
-            orig_directory = self.directory
-            self.directory = self.docroot
-            assert sys.version_info >= (3, 7)
-        outpath = super(HTTPBackendHandler, self).translate_path(path)
-        if hasattr(self, "directory"):
-            self.directory = orig_directory
-        os.chdir(thisdir)
-        return outpath
-
-    def find_repo(self, lhs, rhs=None, allow_fake=False):
-        """Strip leading components from rhs and append to lhs until a
-        valid Git repo is encountered.
-
-        TODO this is impossible to follow; use lists instead of strings
-        """
-        if rhs is None:
-            rhs = lhs
-            lhs = "/"
-        fakes = ""
-        path = lhs.rstrip('/') + '/' + rhs.lstrip('/')
-        i = path.find('/', len(lhs)+1)
-        while i >= 0:
-            nextlhs = path[:i]
-            nextrhs = path[i+1:]
-            candidate = self.translate_path(nextlhs)
-            if allow_fake and not os.path.isdir(candidate):
-                # Roll back path
-                path = lhs + path[i:]
-                nextlhs = lhs
-                candidate, nextfake = os.path.split(candidate)
-                fakes += "/" + nextfake
-            if os.path.isdir(candidate) and not is_repo(candidate):
-                lhs, rhs = nextlhs, nextrhs
-                i = path.find('/', len(lhs)+1)
-            else:
-                break
-        # XXX previously, some call sites expected a leading slash on the
-        # second item. Not sure if all have been updated.
-        return (lhs + (fakes.lstrip("/") if lhs.endswith("/") else fakes),
-                rhs.lstrip("/"))
+        if self.git_env:
+            return True
+        return False
 
     def verify_pass(self, saved, received):
         """Attempt to compare .htpasswd file entry to the sent password
@@ -861,11 +783,14 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         return None
 
     def parse_request(self):
-        """If base method returns True, check auth-related headers
+        """Populate git_env attr for git requests
+
+        Otherwise check auth, if necessary.  Only return False after
+        sending error (if base method's rv is False, assume it already
+        did so).
         """
         rv = super(HTTPBackendHandler, self).parse_request()
-        self._original_path = self.path
-        self._original_docroot = self.docroot
+        self.git_env = None
 
         if rv is not True:
             return rv
@@ -873,30 +798,59 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         if self.cipher:  # XXX why is this here?
             DEBUG and self.dlog("SSL info", cipher=self.cipher)
 
-        return self.handle_auth(rv)
+        # Allow SimpleHTTPRequestHandler to attempt fulfilling
+        if not is_ghb_bound(self.command, self.path):
+            if DEBUG:
+                out = dict(vars(self))
+                out["headers"] = dict(self.headers._headers)
+            DEBUG and self.dlog("Onetime deal", **out)
+            authd = self.handle_auth(rv)
+            if authd and self.command == "POST":
+                if self.path.endswith(".git"):
+                    self.maybe_create_repo()
+                else:
+                    msg = "Non-git POST only allowed when creating new repos"
+                    self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, msg)
+                return False
+            return authd
+
+        # TODO replace this with actual env vars
+        config = {
+            "ENFORCE_DOTGIT": ENFORCE_DOTGIT,
+            "USE_NAMESPACES": USE_NAMESPACES
+        }
+        result = {}
+        try:
+            result = determine_env_vars(
+                self.docroot, verb=self.command,
+                uri=self.path, **config
+            )
+        except Exception:
+            import traceback
+            self.log_error(
+                "\n".join(traceback.format_exception(*sys.exc_info()))
+            )
+            self.send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Problem parsing path"
+            )
+            # Bail out of session
+            return False
+
+        # FIXME impossible, delete this
+        if self.command == "GET":
+            assert not self.get_objects_re.match(result["PATH_INFO"])
+
+        DEBUG and self.dlog("Initial parse", result=result)
+        self.git_env = result
+
+        # TODO use git_env in auth
+        return self.handle_auth(True)
 
     def run_cgi(self):
-        """
-        Execute a CGI script
-        --------------------
-        -   The leading slash on ``rest`` is illogical, but it's a
-            longstanding CGI convention, like the "path" element.
-        - ``git_root`` merely means the URI of the dir containing the
-            Git repo. It can have any number of leading components and
-            must exist (it cannot be ``/``).
-        - ``$DOCROOT`` is a system folder, like ``/var/www``, that's
-            mapped to the root URI ``/``.::
-
-            IDENT DESC                       EXAMPLE
-            ----- -------------------------  -----------------------
-            root  git_root URI               /subdir/repo_parent
-            rest  stuff below repo           /refs/heads/..
-            repo  unadorned, lone repo name  myrepo.git
-            uri   repo URI                   /git_root/myrepo.git
-            abs   real abs path to git_root  /var/www/git_root
+        """Run git-http-backend
 
         GnuTLS issue
-        ------------
+        ~~~~~~~~~~~~
         In Debian (and probably Ubuntu), both curl and git are built
         against GnuTLS, which raises error -110: "the TLS connection was
         non-properly terminated." So, either http-backend isn't sending
@@ -913,93 +867,35 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         .. _source: https://github.com/git/git/http-backend.c
         .. _spec: https://tools.ietf.org/html/rfc2616#section-14.10
         """
-        root, rest, namespace = self.repo_info
-        # Find an explicit query string, if present.
-        rest, _, query = rest.partition('?')
-        # Shift all path components preceding ``repo`` in ``rest`` to ``root``
-        root, rest = self.find_repo(root, rest)
-        #
-        # Extract part after repo name and make candidate for ``plumbing_cmd``.
-        # Guranteed to remove 1st component when depth > 1. This gets tacked on
-        # to ``$PATH_INFO.``
-        i = rest.find('/')
-        if i >= 0:
-            repo, rest = rest[:i], rest[i:]
-        else:
-            repo, rest = rest, ''
-        repo_uri = root + '/' + repo
-        repo_abs = self.translate_path(repo_uri)
-        #
-        DEBUG and self.dlog("enter",
-                            **{k: v for k, v in locals().items() if
-                               k in ('root', 'rest') or k.startswith('repo')})
-        #
-        if ENFORCE_DOTGIT is True and not repo.endswith('.git'):
-            self.send_error(HTTPStatus.FORBIDDEN,
-                            "- invalid repo name %r" % repo)
-            return
-        if any(p in os.listdir(self.git_exec_path) for
-               p in (rest.strip('/'), query.rsplit('=')[-1])):
-            plumbing_cmd = os.path.join(self.git_exec_path,
-                                        query.rsplit('=')[-1] if
-                                        query else rest.strip('/'))
-            if not self.is_executable(plumbing_cmd):
-                # XXX this status code is only meant for header items
-                self.send_error(
-                    HTTPStatus.PRECONDITION_FAILED,
-                    "CGI script is not executable (%r)" % plumbing_cmd)
-                return
-            DEBUG and self.dlog("git-plumbing command", path=plumbing_cmd)
-        else:
-            self.send_error(HTTPStatus.NOT_FOUND,
-                            "- CGI Script '%s' not found." % repo_abs)
-            return
-        #
-        # Env vars only contain strings, so a simple ``env = dict(os.environ)``
-        # would do the same thing, no? Whatever, go with upstream...
-        env = copy.deepcopy(os.environ)
-        uqrest = urlparse.unquote(rest)
-        #
+        env = dict(os.environ)
+        env.update(self.git_env)
+
         # As required by git-http-backend(1); These never change.
         env["GIT_HTTP_EXPORT_ALL"] = ""
-        # Absolute path to ``git_root`` (dir above Git repo)
-        env["GIT_PROJECT_ROOT"] = os.path.abspath(
-            os.path.join(self.docroot, root.lstrip('/')))
-        if namespace is not None:
-            env["GIT_NAMESPACE"] = namespace
-        #
-        # Reformat env vars based on incoming request syntax
-        gitprg_path = os.path.join(self.git_exec_path, 'git-http-backend')
-        env['SCRIPT_NAME'] = "git-http-backend"
-        #
-        env['PATH_INFO'] = '/' + repo.lstrip("/") + uqrest
-        # This is used by git-http-backend when ``GIT_PROJECT_ROOT`` is unset
-        env['PATH_TRANSLATED'] = self.translate_path(os.path.join(*(
-            c.strip('/') for c in (root, repo, uqrest))))
-        #
-        env['QUERY_STRING'] = query
-        #
+        assert env["PATH_INFO"]
+        assert env["PATH_TRANSLATED"]
+        assert "QUERY_STRING" in env
+
         # XXX was previously assumed only ``git-receive-pack`` required
         # REMOTE_USER, but this might not be true. Not sure whether this is
         # handled by the remote git-exec program or the os or the server.
-        if "receive-pack" in query or "receive-pack" in rest:
+        if self.path.endswith("git-receive-pack"):
             # Fallback for when auth isn't used, but any value is misleading
             env.setdefault("REMOTE_USER", env.get("USER", "unknown"))
-        #
-        if not os.path.isfile(os.path.join(repo_abs, 'HEAD')):
-            self.send_error(
-                HTTPStatus.NOT_FOUND,
-                "%s says: not a Git repo (%r)" % (sys.argv[0], repo_uri))
-            return
+
+        # From here, it's pretty much CGIHTTPRequestHandler.run_cgi
+
         # Reference: http://hoohoo.ncsa.uiuc.edu/cgi/env.html
-        # XXX Much of the following could be prepared ahead of time!
-        env['SERVER_SOFTWARE'] = self.version_string()
-        env['SERVER_NAME'] = self.server.server_name
-        env['GATEWAY_INTERFACE'] = 'CGI/1.1'
-        env['SERVER_PROTOCOL'] = self.protocol_version
-        env['SERVER_PORT'] = str(self.server.server_port)
-        env['REQUEST_METHOD'] = self.command
-        env['REMOTE_ADDR'] = self.client_address[0]
+        env.update({
+            "SCRIPT_NAME": "git-http-backend",
+            'SERVER_SOFTWARE': self.version_string(),
+            'SERVER_NAME': self.server.server_name,
+            'GATEWAY_INTERFACE': 'CGI/1.1',
+            'SERVER_PROTOCOL': self.protocol_version,
+            'SERVER_PORT': str(self.server.server_port),
+            'REQUEST_METHOD': self.command,
+            'REMOTE_ADDR': self.client_address[0]
+        })
         if hasattr(self.headers, "get_content_type"):
             env['CONTENT_TYPE'] = self.headers.get(
                 'content-type', self.headers.get_content_type()
@@ -1014,6 +910,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
         if referer:
             env['HTTP_REFERER'] = referer
         accept = []
+        # Actual content type is an X-<custom>
         for line in self.headers.getallmatchingheaders('accept'):
             if line[:1] in "\t\n\r ":
                 accept.append(line.strip())
@@ -1032,7 +929,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
             env['HTTP_COOKIE'] = cookie_str
         #
         DEBUG and self.dlog("headers", **self.headers)
-        #
+
         # XXX Other HTTP_* headers
         # Since we're setting the env in the parent, provide empty
         # values to override previously set values
@@ -1040,101 +937,49 @@ class HTTPBackendHandler(CGIHTTPRequestHandler):
                    'HTTP_USER_AGENT', 'HTTP_COOKIE', 'HTTP_REFERER')
         for k in rfcvars:
             env.setdefault(k, "")
-        #
+
         # Env vars required by ``git-http-backend`` and/or rfc3875
         if DEBUG:
-            _these = {k: v for k, v in env.items() if k in rfcvars or
-                      any(k.startswith(p) for
-                          p in ("QUERY_", "PATH_", "GIT_", "REMOTE_"))}
-            self.dlog("envvars", **_these)
-        #
+            _prees = ("QUERY_", "PATH_", "GIT_", "REMOTE_")
+            _keys = (
+                k for k in env if k in rfcvars or
+                any(k.startswith(p) for p in _prees)
+            )
+            self.dlog("envvars", **{k: env[k] for k in _keys})
+
         self.send_response(HTTPStatus.OK, "Script output follows")
         if hasattr(self, "flush_headers"):
             self.flush_headers()
-        # decoded_query = query.replace('+', ' ')
-        cmdline = [gitprg_path]
-        if query and '=' not in query:
-            cmdline.append(query)
-        DEBUG and self.dlog("cmdline", cmdline=cmdline)
+
         try:
             nbytes = int(length)
         except (TypeError, ValueError):
             nbytes = 0
-        #############################
-        # Experiment # ######## BEGIN
-        #############################
-        if DEBUG:
-            config = {
-                "ENFORCE_DOTGIT": ENFORCE_DOTGIT,
-                "CREATE_MISSING": CREATE_MISSING,
-                "USE_NAMESPACES": USE_NAMESPACES
-            }
-            result = {}
-            try:
-                result = determine_env_vars(
-                    self._original_docroot, verb=self.command,
-                    uri=self._original_path, **config
-                )
-            except Exception:
-                import traceback
-                self.log_error(
-                    "\n".join(traceback.format_exception(*sys.exc_info()))
-                )
-            else:
-                vs = {
-                    "GIT_PROJECT_ROOT": (
-                        result["GIT_PROJECT_ROOT"], env["GIT_PROJECT_ROOT"]
-                    ),
-                    "PATH_INFO": (
-                        result["PATH_INFO"], env["PATH_INFO"]
-                    ),
-                    "PATH_TRANSLATED": (
-                        result["PATH_TRANSLATED"], env["PATH_TRANSLATED"]
-                    ),
-                    "QUERY_STRING": (
-                        result["QUERY_STRING"], env["QUERY_STRING"]
-                    ),
-                    "GIT_NAMESPACE": (
-                        result.get("GIT_NAMESPACE"), env.get("GIT_NAMESPACE")
-                    ),
-                }
-                for k, v in list(vs.items()):
-                    old, new = v
-                    if old == new:
-                        vs.pop(k)
-                assert not vs, vs
-        #############################
-        # Experiment # ########## END
-        #############################
-        p = Popen(cmdline, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
-        if self.command.lower() == "post" and nbytes > 0:
-            data = self.rfile.read(nbytes)
-        else:
-            data = None
-        # throw away additional data [see bug #427345]
-        while select.select([self.rfile._sock], [], [], 0)[0]:
-            if not self.rfile._sock.recv(1):
-                break
-        stdout, stderr = p.communicate(data)
-        # See note in docstring re GnuTLS and Content-Length
-        hdr, _, payload = stdout.partition(b"\r\n\r\n")
-        if b"Content-Length" in hdr:
-            self.log_error("'Content-Length' already present!: %r", hdr)
-        length = len(payload)
-        self.send_header("Content-Length", length)
-        if hasattr(self, "flush_headers"):
-            self.flush_headers()
-        #
-        self.wfile.write(stdout)
+
+        cmdline = [os.path.join(self.git_exec_path, 'git-http-backend')]
+        proc = Popen(cmdline, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
+        stdout, stderr = proc.communicate(self.consume_and_exhaust(nbytes))
+
+        proc.stderr.close()
+        proc.stdout.close()
+        assert proc.returncode is not None
+        status = proc.returncode
         if stderr:
-            self.log_error('%s', stderr)
-        p.stderr.close()
-        p.stdout.close()
-        status = p.returncode
+            self.log_error("E: Got unexpected stderr: %r", stderr)
         if status:
             self.log_error("CGI script exit status %#x", status)
         else:
             DEBUG and self.dlog("CGI script exited OK")
+
+        # See note in docstring re GnuTLS and Content-Length
+        hdr, _, payload = stdout.partition(b"\r\n\r\n")
+        if b"Content-Length" in hdr:
+            self.log_error("W: 'Content-Length' already present!: %r", hdr)
+
+        self.send_header("Content-Length", len(payload))
+        if hasattr(self, "flush_headers"):
+            self.flush_headers()
+        self.wfile.write(stdout)
 
 
 def register_signals(server, quitters, keepers=None):
@@ -1300,7 +1145,7 @@ def main(**overrides):
     _DEBUG="1".
     """
     global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, ENFORCE_DOTGIT, \
-        CREATE_MISSING, USE_NAMESPACES, REQURE_ACCOUNT
+        ALLOW_CREATION, USE_NAMESPACES, REQURE_ACCOUNT
 
     if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
         print("WARNING: untried on Python versions < 3.5, except for 2.7",
@@ -1330,13 +1175,12 @@ def main(**overrides):
     LOGFILE = getvar("LOGFILE")
     AUTHFILE = getvar("AUTHFILE")
     DEBUG = getvar("DEBUG", is_bool=True)
-    CREATE_MISSING = getvar("CREATE_MISSING", is_bool=True)
+    ALLOW_CREATION = getvar("ALLOW_CREATION", is_bool=True)
     USE_NAMESPACES = getvar("USE_NAMESPACES", is_bool=True)
     REQURE_ACCOUNT = getvar("REQURE_ACCOUNT", is_bool=True)
 
     # Deprecations
     ENFORCE_DOTGIT = True
-    # CREATE_MISSING = False
 
     dep_msg = "\x1b[33;1mWARNING\x1b[m: Option {} is no longer supported."
     for opt in ("ENFORCE_DOTGIT", "FIRST_CHILD_OK", "CREATE_MISSING"):

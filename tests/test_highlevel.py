@@ -348,29 +348,43 @@ def test_basic_errors(server, testdir, create, ssl):
     twofer("git config -l")
     pe.sendline("git push -u origin master")
     if create:
-        twofer("fatal")
-        server.consume_log(["*GET*403*", "*_CREATE_MISSING*"])
+        pe.expect("fatal")
+        server.consume_log(["*AssertionError*", "*500*Problem parsing path*"])
     else:
-        twofer("up-to-date")
+        pe.expect("up-to-date")
         server.consume_log("*GET /test_basic_errors*200*")
 
-    # OK
     if create:
-        remote = "%s/repos/test_basic_errors.git" % server.url
-        assert server.stop() == 0  # restart server with envvar
-        server.start(_CREATE_MISSING="1", **env)
-        server.consume_log(["*Started serving*"])
-    else:
-        remote = server.clone(testdir.tmpdir, "repos")
-    twofer("git remote set-url origin %s" % remote)
+        if ssl:
+            url = "%s/test_basic_errors.git" % server.url
+            twofer("curl --insecure --include --data init=1 %s" % url)
+        else:
+            from textwrap import dedent
+            post_src = dedent("""
+            POST /test_basic_errors.git HTTP/1.1
+            Host: localhost:%s
+            User-Agent: nc
+            Accept: */*
+            Content-Length: 7
+            Content-Type: application/x-www-form-urlencoded
+
+            init=1
+            """ % server.port).strip().splitlines()
+            post = testdir.tmpdir / "post"
+            post.write("\r\n".join(post_src))
+            twofer("nc localhost %s < ./post" % server.port)
+        pe.expect("created")
+
     twofer("git config -l")
     pe.sendline("git push -u origin master")
     if create:
-        twofer("new branch")
-        server.consume_log(["*GET*/*200*", "*POST*/*200*"])
+        pe.expect("new branch")
+        server.consume_log(
+            ["*GET*/test_basic_errors.git*200*", "*POST*/*200*"]
+        )
     else:
-        twofer("up-to-date")
-        server.consume_log("*GET*repos*200*")
+        pe.expect("up-to-date")
+        server.consume_log("*GET*/test_basic_errors.git*200*")
 
     pe.sendline("exit")
     pe.expect(EOF)
@@ -384,8 +398,6 @@ def test_basic_errors(server, testdir, create, ssl):
 def test_simulate_teams(server, testdir, create, first, ssl):
     """This is from ProGit, the 'Git Book'."""
     env = {}
-    if create:
-        env.update(_CREATE_MISSING="1")
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
@@ -414,6 +426,12 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     twofer("git remote add origin {}".format(url))
     twofer("git config -l")
     if create:
+        if ssl:
+            pe.sendline("curl --insecure --include --data init=1 %s" % url)
+        else:
+            pe.sendline("curl --include --data init=1 %s" % url)
+        pe.expect("created")
+        pe.expect(prompt_re)
         pe.sendline("git push -u origin master")
         pe.expect("new branch")
         server.consume_log(["*GET*/*200*", "*POST*/*200*"])
@@ -523,8 +541,6 @@ def test_simulate_teams(server, testdir, create, first, ssl):
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_namespaces(server, testdir, create, first, auth, ssl):
     env = {"_USE_NAMESPACES": "1"}
-    if create:
-        env.update(_CREATE_MISSING="1")
     if auth:
         env.update(_AUTHFILE=server.authfile.strpath)
     if ssl:
@@ -561,6 +577,14 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     twofer("git init")
     twofer("git add -A && git commit -m 'Init'")
     if create:
+        if ssl:
+            pe.sendline(
+                "curl --insecure --include --data init=1 %s" % project_url
+            )
+        else:
+            pe.sendline("curl --include --data init=1 %s" % project_url)
+        pe.expect("created")
+        pe.expect(prompt_re)
         twofer("git remote add origin {}".format(project_url))
         pe.sendline("git push -u origin master")
         if auth:
