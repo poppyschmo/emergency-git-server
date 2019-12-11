@@ -180,19 +180,17 @@ def get_libexec_dir():
     #
     try:
         out_path = check_output(("git", "--exec-path"))
-    except CalledProcessError:
-        out_path = "/usr/libexec/git-core"
-    except FileNotFoundError:
+    except (CalledProcessError, FileNotFoundError):
+        cmd = ("sh", "-c", "command -p git --exec-path")
         try:
-            out_path = check_output("command -p git --exec-path".split())
-        except FileNotFoundError:
-            print(
-                "Could not locate primary git program in $PATH",
-                file=sys.stderr,
-            )
+            out_path = check_output(cmd)
+        except Exception:
+            if os.path.exists("/usr/libexec/git-core"):
+                return "/usr/libexec/git-core"
+            msg = "Could not locate git exe in $PATH"
+            print(msg, file=sys.stderr)
             raise
-    else:
-        out_path = out_path.decode().strip()
+    out_path = out_path.decode().strip()
     return out_path
 
 
