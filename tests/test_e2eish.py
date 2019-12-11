@@ -63,6 +63,13 @@ bw_script = os.path.join(os.path.dirname(__file__), "bw.sh")
 is_travis = os.getenv("TRAVIS")
 
 
+gitignore = "\nspawn.out\n"
+gitconfig = """
+[user]
+        name = {USER}
+        email = {USER}@{HOSTNAME}.localhost
+"""
+
 certconf_source = """
 [ req ]
 utf8                   = yes
@@ -119,52 +126,231 @@ def get_twofer(child, prompt=prompt_re):
     return _twofer
 
 
+class Server:
+    proc = None
+    port = None
+    url = None
+    port_pat = re.compile(r"port (\d+)")
+
+    def __init__(
+        self,
+        # *, <- no py27
+        docroot,
+        request,
+        bw_path,
+        server_path,
+        py_executable,
+        missing_envvars,
+    ):
+        self.docroot = docroot
+        self.request = request
+        self.bw_path = bw_path
+        self.missing_envvars = missing_envvars
+
+        self.logfile = docroot.join("server.log")
+        self.pickfile = docroot.join("data.pickle")
+        self.cachedir = request.config.cache.makedir("gitsrv")
+        self._certfile = self.cachedir.join("dummycert.pem")
+        self._authfile = docroot.join("auth.json")
+        self.cmdline = [py_executable, server_path, self.docroot.strpath]
+
+    def dumb_waiter(self, func, maxiter=30, wait_for=0.1):
+        from time import sleep
+
+        while maxiter > 0:
+            rv = func()
+            if rv:
+                return rv
+            sleep(wait_for)
+            maxiter -= 1
+        if maxiter == 0:
+            raise RuntimeError("Timed out waiting for %s" % func)
+
+    def find_port(self):
+        m = self.port_pat.search(self.dumb_waiter(self.logfile.read))
+        if m:
+            return int(m.groups()[0])
+        raise RuntimeError("Couldn't get port")
+
+    def start(self, **env):
+        env = dict(os.environ, **env)
+        env.setdefault("_LOGFILE", self.logfile.strpath)
+        env.setdefault("_PICKFILE", self.pickfile.strpath)
+        proc = subprocess.Popen(self.cmdline, env=env)
+        self.proc = proc
+        assert self.dumb_waiter(self.logfile.exists) is True
+        self.port = env.get("_PORT") or self.find_port()
+        scheme = ("http", "https")["_CERTFILE" in env]
+        self.url = "{}://localhost:{}".format(scheme, self.port)
+        return proc
+
+    def stop(self):
+        self.proc.terminate()
+        return self.proc.wait(timeout=2)
+
+    def truncate_log(self):
+        self.logfile.write("")
+
+    def consume_log(self, pattern, truncate=True):
+        from _pytest.outcomes import Failed
+
+        def inner():
+            lines = self.logfile.readlines()
+            if lines:
+                latest = LineMatcher(lines)
+                try:
+                    latest.fnmatch_lines(pattern)
+                except Failed:
+                    return None
+                return True
+
+        self.dumb_waiter(inner)
+        if truncate:
+            self.truncate_log()
+
+    def log_empty(self):
+        return self.logfile.size() == 0
+
+    def clone(self, repo, subpath=None):
+        """Clone LocalPath repo and return remote for client to add."""
+        cwd = self.docroot
+        name = None
+        if subpath:
+            subpath = subpath.strip("/")
+            if subpath.endswith(".git"):
+                subpath, name = os.path.split(subpath)
+            if subpath:
+                cwd = cwd.join(subpath)
+                if not cwd.exists():
+                    cwd.ensure(dir=True)
+        out = err = b""
+        env = os.environ.copy()
+        env.update(BWRAP_NOREPO="1")
+        if not name:
+            name = repo.basename.rstrip("0123456789") + ".git"
+        cmd = [] if is_travis else [self.bw_path.strpath]
+        cmd += ["git", "clone", "--bare", repo.join(".git").strpath, name]
+        try:
+            out = subprocess.check_output(
+                cmd, stderr=subprocess.PIPE, cwd=cwd.strpath, env=env
+            )
+        except subprocess.CalledProcessError as exc:
+            out = exc.output
+            err = exc.stderr
+            raise
+        finally:
+            if out:
+                self.docroot.join("git.out").write(out)
+            if err:
+                self.docroot.join("git.err").write(err)
+        path = "{}/{}".format(subpath, name) if subpath else name
+        return "{}/{}".format(self.url, path)
+
+    @property
+    def certfile(self):
+        assert self.create_cert()
+        return self._certfile
+
+    def create_cert(self):
+        certstr = self._certfile.strpath
+        if self._certfile.exists():
+            try:  # Allow self-signed
+                subprocess.check_call(
+                    ["openssl", "verify", "-trusted", certstr, certstr]
+                )
+            except subprocess.CalledProcessError:
+                self._certfile.remove()
+            else:
+                return True
+
+        env = os.environ.copy()
+        if self.missing_envvars:  # TOX
+            env.update(self.missing_envvars)
+
+        openssl_cnf = self.cachedir.join("openssl.cnf")
+        if not openssl_cnf.exists():
+            cmd = [] if is_travis else [self.bw_path.strpath]
+            env.update(BWRAP_NOREPO="1")
+            cmd += ["git", "config", "user.email"]
+            email = subprocess.check_output(cmd, env=env)
+            email = email.strip().decode()
+            openssl_cnf.write(
+                certconf_source.format(path=certstr, email=email)
+            )
+        # Some sites need -newkey algo to be passed
+        cmdline = ["openssl", "req", "-config", openssl_cnf.strpath]
+        cmdline += ["-x509", "-days", "1", "-newkey", "rsa", "-out", certstr]
+        subprocess.check_call(cmdline, env=env)
+        return True
+
+    @property
+    def authfile(self):
+        if not self._authfile.exists():
+            secretsfile = self.docroot.join("secrets")
+            # Use crypt(3)-generated passwords, which don't require
+            # openssl: maintainer: "forkme", contributor: "changeme"
+            secretsfile.write(secrets_source)
+            pre = ("/org", "")["first" in self.request._pyfuncitem.name]
+            self._authfile.write(
+                authconf_source
+                % dict(pre=pre, secretsfile=secretsfile.strpath)
+            )
+        return self._authfile
+
+    @property
+    def pe_child_cmd(self):  # doesn't belong here but whatever
+        if is_travis:
+            return "bash --noprofile --norc -i"
+
+        # bw.sh wants the project directory path as $1
+        return "bash {} {}".format(
+            self.bw_path.strpath, self.request.config.rootdir.strpath
+        )
+
+    def spawn_client(self, td):
+        # Use self.tmphome instead of pytest's USERPROFILE
+        if self.missing_envvars:
+            td._env_run_update.update(self.missing_envvars)
+        return td.spawn(self.pe_child_cmd)
+
+
 @pytest.fixture
 def server(request, tmpdir_factory):
     if not is_travis and shutil.which("bwrap") is None:
         pytest.fail("Bubblewrap not installed")
-    from time import sleep
 
-    name = request._pyfuncitem.name.replace("[", ".").strip("]")
-    tmphome = tmpdir_factory.mktemp("home-{}".format(name), numbered=True)
-    docroot = tmpdir_factory.mktemp("srv-{}".format(name), numbered=True)
+    tmpname = request._pyfuncitem.name.replace("[", ".").strip("]")
+    tmphome = tmpdir_factory.mktemp("home-{}".format(tmpname), numbered=True)
+    docroot = tmpdir_factory.mktemp("srv-{}".format(tmpname), numbered=True)
+
     docroot.chdir()
-    cachedir = request.config.cache.makedir("gitsrv")
-    bw_path = docroot.join("bw.sh")
+
     server_path = docroot.join("emergency_git_server.py").strpath
     shutil.copyfile(emergency_git_server.__file__, server_path)
+    # Wrap script with dumper when --dump-dlog passed
     if request.config.getoption("dump_dlog"):
         server_path = docroot.join("dumper.py").strpath
         shutil.copyfile(dumper.__file__, server_path)
-    shutil.copyfile(bw_script, bw_path.strpath)
-    bw_path.chmod(0o700)
 
-    missing_envvars = {}
-    misus = os.getenv("USER")
-    misho = os.getenv("HOME")
-    miste = os.getenv("TERM")
-    mishn = os.getenv("HOSTNAME")
-    # TOX/TRAVIS need these
-    if not misus:
-        from _pytest.tmpdir import get_user
+    if is_travis:
+        bw_path = None
+    else:
+        bw_path = docroot.join("bw.sh")
+        shutil.copyfile(bw_script, bw_path.strpath)
+        bw_path.chmod(0o700)
 
-        misus = get_user()
-        missing_envvars.update(USER=misus)
-    if is_travis and not misho:
-        misho = "/home/%s" % misus
-        missing_envvars.update(HOME=misho)
-    if not miste:
-        miste = "xterm"
-        missing_envvars.update(TERM=miste)
-    if not mishn:
-        if is_travis:
-            mishn = "ci-worker"
-        else:
-            raise RuntimeError("HOSTNAME required in environment")
-        missing_envvars.update(HOSTNAME=mishn)
-    # Use fake HOME for bwrap
-    if not is_travis:
-        missing_envvars["HOME"] = tmphome.strpath
+    missing_envvars = {
+        "HOME": tmphome.strpath,
+        "USER": os.getenv("USER") or "gituser",
+        "TERM": os.getenv("TERM") or "xterm",
+        "HOSTNAME": os.getenv("HOSTNAME", "ci-worker" if is_travis else None),
+    }
+    assert all(missing_envvars.values())
+
+    # Global git config
+    (tmphome / ".config/git").ensure(dir=True)  # XDG_CONFIG_HOME
+    (tmphome / ".config/git/ignore").write(gitignore)
+    (tmphome / ".config/git/config").write(gitconfig.format(**missing_envvars))
 
     py_executable = os.getenv("GITSRV_TEST_PYEXE")
     if py_executable:
@@ -175,195 +361,17 @@ def server(request, tmpdir_factory):
     else:
         py_executable = sys.executable
 
-    class Server:
-        proc = None
-        port = None
-        url = None
-        port_pat = re.compile(r"port (\d+)")
-
-        def __init__(self):
-            self.missing_envvars = missing_envvars
-            self.rootdir = request.config.rootdir
-            self.tmphome = tmphome
-            self.docroot = docroot
-            self.cachedir = cachedir
-            self.logfile = docroot.join("server.log")
-            self.pickfile = docroot.join("data.pickle")
-            self._certfile = cachedir.join("dummycert.pem")
-            self._authfile = docroot.join("auth.json")
-            self.cmdline = [py_executable, server_path, docroot.strpath]
-
-        def dumb_waiter(self, func, maxiter=30, wait_for=0.1):
-            while maxiter > 0:
-                rv = func()
-                if rv:
-                    return rv
-                sleep(wait_for)
-                maxiter -= 1
-            if maxiter == 0:
-                raise RuntimeError("Timed out waiting for %s" % func)
-
-        def find_port(self):
-            m = self.port_pat.search(self.dumb_waiter(self.logfile.read))
-            if m:
-                return int(m.groups()[0])
-            raise RuntimeError("Couldn't get port")
-
-        def start(self, **env):
-            env = dict(os.environ, **env)
-            env.setdefault("_LOGFILE", self.logfile.strpath)
-            env.setdefault("_PICKFILE", self.pickfile.strpath)
-            proc = subprocess.Popen(self.cmdline, env=env)
-            self.proc = proc
-            assert self.dumb_waiter(self.logfile.exists) is True
-            self.port = env.get("_PORT") or self.find_port()
-            scheme = ("http", "https")["_CERTFILE" in env]
-            self.url = "{}://localhost:{}".format(scheme, self.port)
-            return proc
-
-        def stop(self):
-            self.proc.terminate()
-            return self.proc.wait(timeout=2)
-
-        def truncate_log(self):
-            self.logfile.write("")
-
-        def consume_log(self, pattern, truncate=True):
-            from _pytest.outcomes import Failed
-
-            def inner():
-                lines = self.logfile.readlines()
-                if lines:
-                    latest = LineMatcher(lines)
-                    try:
-                        latest.fnmatch_lines(pattern)
-                    except Failed:
-                        return None
-                    return True
-
-            self.dumb_waiter(inner)
-            if truncate:
-                self.truncate_log()
-
-        def log_empty(self):
-            return self.logfile.size() == 0
-
-        def clone(self, repo, subpath=None):
-            """Clone LocalPath repo and return remote for client to add."""
-            cwd = self.docroot
-            name = None
-            if subpath:
-                subpath = subpath.strip("/")
-                if subpath.endswith(".git"):
-                    subpath, name = os.path.split(subpath)
-                if subpath:
-                    cwd = cwd.join(subpath)
-                    if not cwd.exists():
-                        cwd.ensure(dir=True)
-            out = err = b""
-            env = os.environ.copy()
-            env.update(BWRAP_NOREPO="1")
-            if not name:
-                name = repo.basename.rstrip("0123456789") + ".git"
-            cmd = [] if is_travis else [bw_path.strpath]
-            cmd += ["git", "clone", "--bare", repo.join(".git").strpath, name]
-            try:
-                out = subprocess.check_output(
-                    cmd, stderr=subprocess.PIPE, cwd=cwd.strpath, env=env
-                )
-            except subprocess.CalledProcessError as exc:
-                out = exc.output
-                err = exc.stderr
-                raise
-            finally:
-                if out:
-                    self.docroot.join("git.out").write(out)
-                if err:
-                    self.docroot.join("git.err").write(err)
-            path = "{}/{}".format(subpath, name) if subpath else name
-            return "{}/{}".format(self.url, path)
-
-        @property
-        def certfile(self):
-            assert self.create_cert()
-            return self._certfile
-
-        def create_cert(self):
-            certstr = self._certfile.strpath
-            if self._certfile.exists():
-                try:  # Allow self-signed
-                    subprocess.check_call(
-                        ["openssl", "verify", "-trusted", certstr, certstr]
-                    )
-                except subprocess.CalledProcessError:
-                    self._certfile.remove()
-                else:
-                    return True
-
-            env = os.environ.copy()
-            if self.missing_envvars:  # TOX
-                env.update(self.missing_envvars)
-
-            openssl_cnf = self.cachedir.join("openssl.cnf")
-            if not openssl_cnf.exists():
-                cmd = [] if is_travis else [bw_path.strpath]
-                env.update(BWRAP_NOREPO="1")
-                cmd += ["git", "config", "user.email"]
-                email = subprocess.check_output(cmd, env=env)
-                email = email.strip().decode()
-                openssl_cnf.write(
-                    certconf_source.format(path=certstr, email=email)
-                )
-            # Some sites need -newkey algo to be passed
-            cmdline = [
-                "openssl",
-                "req",
-                "-config",
-                openssl_cnf.strpath,
-                "-x509",
-                "-days",
-                "1",
-                "-newkey",
-                "rsa",
-                "-out",
-                certstr,
-            ]
-            subprocess.check_call(cmdline, env=env)
-            return True
-
-        @property
-        def authfile(self):
-            if not self._authfile.exists():
-                secretsfile = self.docroot.join("secrets")
-                # Use crypt(3)-generated passwords, which don't require
-                # openssl: maintainer: "forkme", contributor: "changeme"
-                secretsfile.write(secrets_source)
-                pre = ("/org", "")["first" in request._pyfuncitem.name]
-                self._authfile.write(
-                    authconf_source
-                    % dict(pre=pre, secretsfile=secretsfile.strpath)
-                )
-            return self._authfile
-
-        @property
-        def pe_child_cmd(self):  # doesn't belong here but whatever
-            if is_travis:
-                return "bash --noprofile --norc -i"
-            else:
-                return "bash {} {}".format(
-                    bw_path.strpath, request.config.rootdir.strpath
-                )
-
-        def spawn_client(self, td):
-            # Use self.tmphome instead of pytest's USERPROFILE
-            if self.missing_envvars:
-                td._env_run_update.update(self.missing_envvars)
-            return td.spawn(self.pe_child_cmd)
-
-    s = Server()
-    yield s
-    if s.proc:
-        s.proc.kill()
+    server = Server(
+        docroot=docroot,
+        request=request,
+        missing_envvars=missing_envvars,
+        py_executable=py_executable,
+        server_path=server_path,
+        bw_path=bw_path,
+    )
+    yield server
+    if server.proc:
+        server.proc.kill()
 
 
 # XXX param ``first`` used to mean option _FIRST_CHILD_OK, which has been
@@ -388,6 +396,8 @@ def test_basic_errors(server, testdir, create, ssl):
     twofer("echo foo > foo.txt")
     twofer("git init")
     twofer("git add -A && git commit -m 'Init'")
+    # Regression (invalid email), also triggered by "config --global"
+    assert b"fatal" not in pe.before
 
     # Errors
     if create:

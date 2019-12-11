@@ -27,6 +27,7 @@ bwrap_args=(
 
 one2one_ro=(
     "$REPO"
+    "${HOME:-__fake__}/.config/git"
 
     /etc/os-release
     /etc/resolv.conf
@@ -49,16 +50,6 @@ for p in "${one2one_ro[@]}"; do
     fi
 done
 
-gitignore="
-spawn.out
-"
-
-gitconfig="
-[user]
-        name = $USER
-        email = $USER@$HOSTNAME.localhost
-"
-
 if (( $# )); then
     CMD=( "$@" )
 else
@@ -75,11 +66,8 @@ fi
         --symlink /usr/lib64 /lib64 \
         --symlink /usr/bin /bin \
         --symlink /usr/sbin /sbin \
-        --args 14 \
         --dir "$HOME" \
-        --dir "$HOME/.config/git" \
-        --file 9 "$HOME/.config/git/ignore" \
-        --file 10 "$HOME/.config/git/config" \
+        --args 14 \
         --unshare-all \
         --hostname "$HOSTNAME" \
         --share-net \
@@ -92,8 +80,6 @@ fi
         --file 12 /etc/group \
         --file 13 "$HOME/.curlrc" \
         "${CMD[@]}") \
-    9< <(printf '%s\n' "$gitignore") \
-    10< <(printf '%s\n' "$gitconfig") \
     11< <(printf '%s\n' "$(getent passwd ${UID:-$(id -u)})") \
     12< <(getent group "${GID:-$(id -g)}" 65534) \
     13< <(printf '%s\n' 'capath=/etc/ssl/certs') \
