@@ -343,6 +343,35 @@ def create_repo_from_uri(abspath):
     return check_output(("git", "-C", abspath, "init", "--bare"))
 
 
+def verify_pass(saved, received):
+    """Attempt to compare .htpasswd file entry to the sent password
+
+    The only supported formats are unix crypt(3) and sha1. Both args
+    must be strings.
+    """
+    if saved.startswith("$apr1"):
+        salt = saved.split("$")[2]
+        # Allow CalledProcessError to propagate
+        args = ["openssl", "passwd", "-apr1", "-salt", salt, received]
+        checked = check_output(args)
+        if checked.decode().strip() == saved:
+            return True
+    elif saved.startswith("{SHA}"):
+        import base64
+        import hashlib
+
+        binpass = saved.partition("{SHA}")[-1].encode()
+        binpass = base64.b64decode(binpass)
+        if hashlib.sha1(received.encode()).digest() == binpass:
+            return True
+    elif len(saved) == 13:
+        import crypt
+
+        if crypt.crypt(received, saved[:2]) == saved:
+            return True
+    return False
+
+
 class TlsServer(HTTPServer, object):
     """SSL-aware HTTPServer.
 
@@ -587,37 +616,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             return True
         return False
 
-    def verify_pass(self, saved, received):
-        """Attempt to compare .htpasswd file entry to the sent password
-
-        The only supported formats are unix crypt(3) and sha1. Both args
-        must be strings.
-        """
-        if saved.startswith("$apr1") and self.has_openssl is True:
-            salt = saved.split("$")[2]
-            try:
-                args = ["openssl", "passwd", "-apr1", "-salt", salt, received]
-                checked = check_output(args)
-            except CalledProcessError:
-                self.has_openssl = False
-            else:
-                if checked.decode().strip() == saved:
-                    return True
-        elif saved.startswith("{SHA}"):
-            import base64
-            import hashlib
-
-            binpass = saved.partition("{SHA}")[-1].encode()
-            binpass = base64.b64decode(binpass)
-            if hashlib.sha1(received.encode()).digest() == binpass:
-                return True
-        elif len(saved) == 13:
-            import crypt
-
-            if crypt.crypt(received, saved[:2]) == saved:
-                return True
-        return False
-
     def get_passwd_info(self, lines):
         """Return dict of user/password k/v pairs
 
@@ -750,7 +748,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             pass
         else:
             config["DEBUG"] and self.dlog("auth", authorization=authorization)
-            if self.verify_pass(secdict[username], password):
+            if verify_pass(secdict[username], password):
                 self.auth_env["REMOTE_USER"] = username
                 return rv
 
