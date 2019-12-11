@@ -3,6 +3,7 @@ sudo: false
 dist: xenial
 language: python
 python: 3.7
+before_install: ls -1 /opt/python
 install: pip install tox
 script: tox
 
@@ -16,3 +17,5 @@ jobs:
       python: 3.5
     - env: TOXENV=py27
       python: 2.7
+    - env: TOXENV=py38
+      python: 3.8
