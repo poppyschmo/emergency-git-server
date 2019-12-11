@@ -256,6 +256,86 @@ def get_auth_dict(authfile):
     return outdict
 
 
+def is_repo(abspath):
+    """Predicate returning true if abspath is a GITDIR"""
+    if (
+        os.path.isfile(os.path.join(abspath, "HEAD"))
+        or os.path.isdir(os.path.join(abspath, "refs", "heads"))
+    ):
+        return True
+    return False
+
+
+def find_git_root(docroot, uri):
+    """Return subpath below docroot and above uri"""
+    out = []
+    for part in iter(uri.split("/")):
+        if not part:
+            continue
+        maybe = os.path.join(docroot, part)
+        if not os.path.exists(maybe):
+            continue
+        if is_repo(maybe):
+            break
+        out.append(part)
+    return "/".join(out)
+
+
+def determine_env_vars(docroot, verb, uri, **config):
+    """Return dict of env vars needed by git-http-backend"""
+    assert not docroot.endswith("/")
+    gitroot = find_git_root(docroot, uri)
+    assert not gitroot.startswith("/")
+    assert uri.lstrip("/").startswith(gitroot), locals()
+    env = {}
+    env["GIT_PROJECT_ROOT"] = "/".join((docroot, gitroot))
+
+    path, maybe_qmark, query = uri.partition("?")
+    if verb == "GET":
+        assert maybe_qmark == "?"
+        env["QUERY_STRING"] = query
+        assert query in ("service=git-receive-pack", "service=git-upload-pack")
+        repo = path
+    else:
+        assert verb == "POST"
+        env["QUERY_STRING"] = ""
+        repo, exename = os.path.split(path)
+        assert exename == "git-receive-pack" or exename == "git-upload-pack"
+
+    if config.get("ENFORCE_DOTGIT") is not False:  # None is True
+        assert repo.endswith(".git")
+
+    if gitroot:
+        env["PATH_INFO"] = path.replace("/%s" % gitroot, "", 1)
+    assert env["PATH_INFO"][1] != "/", locals()
+    if config.get("USE_NAMESPACES") is True:
+        parts = iter(env["PATH_INFO"].split("/"))
+        ns = []
+        for part in parts:
+            if not part:
+                continue
+            if (
+                (config.get("ENFORCE_DOTGIT") and part.endswith(".git"))
+                or is_repo(os.path.join(env["GIT_PROJECT_ROOT"], part))
+            ):
+                break
+            ns.append(part)
+        parts = list(parts)
+        if ns:
+            assert all(parts), locals()
+            env["GIT_NAMESPACE"] = "/".join(ns)
+        env["PATH_INFO"] = "/".join(["", part] + parts)
+
+    env["PATH_TRANSLATED"] = "/".join(
+        (env["GIT_PROJECT_ROOT"], env["PATH_INFO"].lstrip("/"))
+    )
+    if env["PATH_TRANSLATED"].endswith("/info/refs"):
+        assert os.path.exists(os.path.dirname(env["PATH_TRANSLATED"]))
+    else:
+        assert os.path.exists(env["PATH_TRANSLATED"]), locals()
+    return env
+
+
 class CtxServer(HTTPServer, object):
     """SSL-aware HTTPServer.
 
@@ -426,26 +506,20 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 #
                 # Here, the intent is surely to initialize a new repo.
                 if git_root == "/" and "/" in ns:
-                    tail = ns + "/" + tail
-                    ns = None
-                # For GET requests, ``self.path`` must be rewritten to prevent
-                # 404s by aiding ``SimpleHTTPRequestHandler`` find the repo.
+                    ns, tail = None, "/".join((ns, tail))
                 else:
-                    self.path = collapsed_path = (git_root.rstrip("/") +
-                                                  "/" + tail.lstrip("/"))
+                    # Rewrite ``self.path`` to help other methods find the repo
+                    self.path = collapsed_path = "/".join(
+                        (git_root.rstrip("/"), tail.lstrip("/"))
+                    )
         DEBUG and self.dlog("enter", git_root=git_root, ns=ns, tail=tail)
-        if ns:
-            nsrepo = os.path.join(git_root.lstrip("/"), tail.partition("/")[0])
-            nspath = os.path.join(self.docroot, nsrepo)
-            try:
-                nshead = check_output(("git -C %s symbolic-ref HEAD" %
-                                       nspath).split())
-            except CalledProcessError as e:
-                self.log_error("{!r}".format(e))
-            else:
-                DEBUG and self.dlog("%s/HEAD:" % nsrepo,
-                                    nshead=nshead.decode())
-        #
+        if ns and not CREATE_MISSING:
+            assert os.path.exists(
+                os.path.join(
+                    self.docroot, git_root.lstrip("/"), tail.partition("/")[0]
+                )
+            )
+
         # Disqualify GET requests for static resources in ``$GIT_DIR/objects``.
         if self.get_re.match(collapsed_path):
             return False
@@ -470,7 +544,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             gr_test = self.find_repo(gr_test[0])
             msg = None
             mutate_path = False
-            if gr_test[0] == "/" and not self.is_repo(os.path.join(
+            if gr_test[0] == "/" and not is_repo(os.path.join(
                     self.docroot, tail.lstrip("/").split("/")[0])):
                 # This is for dry clones, so no component can actually exist...
                 #
@@ -594,12 +668,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         os.chdir(thisdir)
         return outpath
 
-    def is_repo(self, abspath):
-        if (os.path.isfile(os.path.join(abspath, 'HEAD')) or
-                os.path.isdir(os.path.join(abspath, 'refs/heads'))):
-            return True
-        return False
-
     def find_repo(self, lhs, rhs=None, allow_fake=False):
         """Strip leading components from rhs and append to lhs until a
         valid Git repo is encountered.
@@ -622,7 +690,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 nextlhs = lhs
                 candidate, nextfake = os.path.split(candidate)
                 fakes += "/" + nextfake
-            if os.path.isdir(candidate) and not self.is_repo(candidate):
+            if os.path.isdir(candidate) and not is_repo(candidate):
                 lhs, rhs = nextlhs, nextrhs
                 i = path.find('/', len(lhs)+1)
             else:
@@ -807,6 +875,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         """If base method returns True, check auth-related headers
         """
         rv = super(HTTPBackendHandler, self).parse_request()
+        self._original_path = self.path
 
         if rv is not True:
             return rv
@@ -1001,6 +1070,53 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             nbytes = int(length)
         except (TypeError, ValueError):
             nbytes = 0
+        #############################
+        # Experiment # ######## BEGIN
+        #############################
+        if DEBUG:
+            config = {
+                "ENFORCE_DOTGIT": ENFORCE_DOTGIT,
+                "CREATE_MISSING": CREATE_MISSING,
+                "FIRST_CHILD_OK": FIRST_CHILD_OK,
+                "USE_NAMESPACES": USE_NAMESPACES
+            }
+            result = {}
+            try:
+                result = determine_env_vars(
+                    self.docroot, verb=self.command,
+                    uri=self._original_path, **config
+                )
+            except Exception:
+                import traceback
+                self.log_error(
+                    "\n".join(traceback.format_exception(*sys.exc_info()))
+                )
+            else:
+                vs = {
+                    "GIT_PROJECT_ROOT": (
+                        result["GIT_PROJECT_ROOT"], env["GIT_PROJECT_ROOT"]
+                    ),
+                    "PATH_INFO": (
+                        result["PATH_INFO"], env["PATH_INFO"]
+                    ),
+                    "PATH_TRANSLATED": (
+                        result["PATH_TRANSLATED"], env["PATH_TRANSLATED"]
+                    ),
+                    "QUERY_STRING": (
+                        result["QUERY_STRING"], env["QUERY_STRING"]
+                    ),
+                    "GIT_NAMESPACE": (
+                        result.get("GIT_NAMESPACE"), env.get("GIT_NAMESPACE")
+                    ),
+                }
+                for k, v in list(vs.items()):
+                    old, new = v
+                    if old == new:
+                        vs.pop(k)
+                assert not vs, vs
+        #############################
+        # Experiment # ########## END
+        #############################
         p = Popen(cmdline, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
         if self.command.lower() == "post" and nbytes > 0:
             data = self.rfile.read(nbytes)
