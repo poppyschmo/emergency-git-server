@@ -274,39 +274,41 @@ def is_repo(abspath):
     return False
 
 
-def find_git_root(docroot, target):
-    """Return relative subpath below docroot and above target"""
-    out = []
-    for part in target.split("/"):
+def dismember_target(docroot, target):
+    """Return tuple of gitroot, namespace, repoplus, query
+
+    ``gitroot``
+        means relative subpath below docroot and above target
+
+    ``repoplus``
+        means the verified git repository name plus trailing URI components
+        before any query; these components may not exist on the file system
+        or even be valid file names
+
+    Each element may contain multiple path components but won't have any
+    leading or trailing slashes. Query, if nonempty, includes the leading
+    question mark.
+
+    """
+    gr = []
+    ns = []
+    path, _, query = url_collapse_path(target)
+    rest = iter(path.split("/"))
+    for part in rest:
         if not part:
             continue
-        sofar = os.path.join(docroot, *out)
+        sofar = os.path.join(docroot, *gr)
         maybe = os.path.join(sofar, part)  # 27 can't do: *foo, bar
         if not os.path.exists(maybe):  # skip phantom ns components
+            ns.append(part)
             continue
         if is_repo(maybe):
+            repoplus = "/".join([part] + list(rest))
             break
-        out.append(part)
-    return "/".join(out)
-
-
-def _find_namespaces(env, config):
-    """Update env dict with namespace info"""
-    parts = iter(env["PATH_INFO"].split("/"))
-    ns = []
-    for part in parts:
-        if not part:
-            continue
-        if part.endswith(".git") or is_repo(
-            os.path.join(env["GIT_PROJECT_ROOT"], part)
-        ):
-            break
-        ns.append(part)
-    parts = list(parts)
-    if ns:
-        assert all(parts), locals()
-        env["GIT_NAMESPACE"] = "/".join(ns)
-    env["PATH_INFO"] = "/".join(["", part] + parts)
+        gr.append(part)
+    else:
+        raise RuntimeError("Git repository not found")
+    return "/".join(gr), "/".join(ns), repoplus, query
 
 
 def determine_env_vars(docroot, verb, target, **config):
@@ -315,11 +317,9 @@ def determine_env_vars(docroot, verb, target, **config):
     Assume target is in "origin-form" as described by
     https://tools.ietf.org/html/rfc7230#section-5.3.1
 
-    Note: this function was machine-generated and cleaned up. It's
-    not worth trying to follow; just treat it like a black box.
     """
     assert docroot.startswith("/") and not docroot.endswith("/")
-    gitroot = find_git_root(docroot, target)
+    gitroot, namespace, repoplus, query = dismember_target(docroot, target)
     assert not gitroot.startswith("/")
     assert target.lstrip("/").startswith(gitroot), locals()
     env = {}
@@ -328,24 +328,25 @@ def determine_env_vars(docroot, verb, target, **config):
     )
     assert not env["GIT_PROJECT_ROOT"].endswith("/"), locals()
 
-    path, maybe_qmark, query = target.partition("?")
     if verb == "GET":
-        assert maybe_qmark == "?"
+        qmark, query = query[0], query[1:]
+        assert qmark == "?"
         env["QUERY_STRING"] = query
         assert query in ("service=git-receive-pack", "service=git-upload-pack")
-        repo = path
+        repo = repoplus
     else:
         assert verb == "POST"
         env["QUERY_STRING"] = ""
-        repo, exename = os.path.split(path)
+        repo, exename = os.path.split(repoplus)
         assert exename == "git-receive-pack" or exename == "git-upload-pack"
 
     assert any(c.endswith(".git") for c in repo.split("/")), locals()
 
-    env["PATH_INFO"] = path.replace("/" + gitroot, "", 1) if gitroot else path
+    env["PATH_INFO"] = "/".join(("", repoplus))
 
     if config.get("USE_NAMESPACES") is True:
-        _find_namespaces(env, config)
+        if namespace:
+            env["GIT_NAMESPACE"] = namespace
 
     env["PATH_TRANSLATED"] = "/".join(
         (env["GIT_PROJECT_ROOT"], env["PATH_INFO"].lstrip("/"))

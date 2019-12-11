@@ -56,6 +56,8 @@ try:
 except ImportError:
     assert is_27
 
+pytestmark = pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
+
 bw_script = os.path.join(os.path.dirname(__file__), "bw.sh")
 
 is_travis = os.getenv("TRAVIS")
@@ -304,9 +306,7 @@ def server(request, tmpdir_factory):
 
             openssl_cnf = self.cachedir.join("openssl.cnf")
             if not openssl_cnf.exists():
-                cmd = (
-                    [] if is_travis else [bw_path.strpath,]
-                )
+                cmd = [] if is_travis else [bw_path.strpath]
                 env.update(BWRAP_NOREPO="1")
                 cmd += ["git", "config", "user.email"]
                 email = subprocess.check_output(cmd, env=env)
@@ -370,7 +370,6 @@ def server(request, tmpdir_factory):
 # retired. It now signifies a "git root" of at least 1 path component.
 
 
-@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
 def test_basic_errors(server, testdir, create, ssl):
@@ -400,7 +399,7 @@ def test_basic_errors(server, testdir, create, ssl):
     pe.sendline("git push -u origin master")
     if create:
         pe.expect("fatal")
-        server.consume_log(["*AssertionError*", "*500*Problem parsing path*"])
+        server.consume_log(["*RuntimeError*", "*500*Problem parsing path*"])
     else:
         pe.expect("up-to-date")
         server.consume_log("*GET /test_basic_errors*200*")
@@ -444,7 +443,6 @@ def test_basic_errors(server, testdir, create, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
 @pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
@@ -596,7 +594,6 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
 @pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("auth", [False, True], ids=["__", "auth"])
@@ -778,7 +775,6 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     assert server.stop() == 0
 
 
-@pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 def test_create_ioset(testdir):
     session_dir = testdir.tmpdir.parts()[-2]
     subs = (

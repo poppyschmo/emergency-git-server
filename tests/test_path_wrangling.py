@@ -157,14 +157,12 @@ def test_url_collapse_path(vs, query, frag):
         assert re.match(r"^/[^/].+", them)
 
 
-@pytest.mark.parametrize(
-    "gitroot", ["foo", "foo/bar"]
-)
-@pytest.mark.parametrize(
-    "extra", ["", "?service=git-upload-pack", "/git-upload-pack"]
-)
-def test_find_git_root(tmpdir, gitroot, extra):
-    from emergency_git_server import find_git_root
+@pytest.mark.parametrize("gitroot", ["", "html", "html/repos"])
+@pytest.mark.parametrize("ns", ["", "foo", "foo/bar"])
+@pytest.mark.parametrize("query", ["", "?service=git-upload-pack"])
+@pytest.mark.parametrize("extra", ["", "/info/refs", "/git-upload-pack"])
+def test_dismember_target(tmpdir, gitroot, ns, extra, query):
+    from emergency_git_server import dismember_target
 
     tmpdir.chdir()
     absgr = tmpdir / gitroot
@@ -174,6 +172,8 @@ def test_find_git_root(tmpdir, gitroot, extra):
     repo.mkdir()
     (repo / "refs/heads/master").ensure()
 
-    path = "/%s/repo.git%s" % (gitroot, extra)
-    result = find_git_root(tmpdir.strpath, path)
-    assert result == gitroot
+    repoplus = "repo.git%s" % extra
+    combined = "/".join(filter(None, [gitroot, ns, repoplus, query]))
+    path = "/" + combined
+    result = dismember_target(tmpdir.strpath, path)
+    assert result == (gitroot, ns, repoplus, query)
