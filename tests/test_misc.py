@@ -1,4 +1,5 @@
 import pytest
+from conftest import is_27
 
 
 def test_boolify_envvar():
@@ -123,3 +124,85 @@ def test_dlog(safe_debug):
         assert fake.last in (src1, src2)
     else:
         assert dedent(src).strip() == fake.last
+
+
+srv_src = r"""
+from __future__ import print_function
+import sys
+from emergency_git_server import (
+    config, register_signals, CGIHTTPRequestHandler, HTTPServer
+)
+config['DEBUG'] = True
+
+address = ('localhost', 8000)
+server = HTTPServer(address, CGIHTTPRequestHandler)
+register_signals(server, ("INT", "TERM"), ("TSTP",))
+print('ready', file=sys.stderr)
+sys.stderr.flush()
+server.serve_forever()
+
+"""
+
+
+def test_register_signals(testdir, request):
+    import sys
+    import time
+    import signal
+    import subprocess
+    import emergency_git_server
+
+    mod = type(testdir.tmpdir)(emergency_git_server.__file__)
+    assert request.config.rootdir.strpath == mod.dirname
+    env = None
+    # XXX unsure why bad encoding when copying byte for byte in py27
+    # For now, hack path instead
+    if is_27:
+        import os
+        env = dict(os.environ)
+        env.update(PYTHONPATH=mod.dirname)
+    else:
+        target = testdir.tmpdir / "emergency_git_server.py"
+        mod.copy(target)
+
+    testdir.makepyfile(serve=srv_src)
+    proc = subprocess.Popen(
+        [sys.executable, "serve.py"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env
+    )
+    import select
+
+    def genny():
+        line = yield
+        assert line == b"ready\n"
+        time.sleep(0.1)
+        proc.send_signal(signal.SIGTSTP)
+        line = yield
+        assert b"Received SIGTSTP" in line
+        assert b"Ignoring" in line
+        proc.send_signal(signal.SIGTERM)
+        line = yield
+        assert b"Received SIGTERM" in line
+        assert b"Quitting" in line
+        assert b"successfully closed" in line
+
+    expect = genny()
+    next(expect)
+    while True:
+        if select.select([proc.stderr], [], [], 0)[0]:
+            if is_27:
+                chunk = os.read(proc.stderr.fileno(), 1024)
+            else:
+                chunk = proc.stderr.read1()
+            try:
+                expect.send(chunk)
+            except StopIteration:
+                break
+        else:
+            time.sleep(0.1)
+
+    if is_27:
+        proc.wait()
+    else:
+        proc.wait(timeout=1)
+    assert proc.returncode == 0

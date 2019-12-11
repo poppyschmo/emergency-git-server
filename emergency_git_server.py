@@ -987,61 +987,38 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
 
 def register_signals(server, quitters, keepers=None):
     """Attach a handler to signals named in quitters or keepers.
+
     The module's default behavior is to quit without teardown for
     certain "unknown" signals like USR1.
     """
-    quitters = (
-        s.upper() if s.upper().startswith("SIG") else "SIG" + s.upper()
-        for s in quitters
-    )
-    if keepers is not None:
-        keepers = [
-            s.upper() if s.upper().startswith("SIG") else "SIG" + s.upper()
-            for s in keepers
-        ]
-    else:
-        keepers = ()
-    # This syntax is forbidden in Python 2.7: ``set((*quitters, *keepers))``
-    signames = set(quitters) | set(keepers)
     import signal
 
-    # Can also ``filter(None, Iterator)`` to get rid of falsey items
-    numxsig = {
-        getattr(signal, sig, None): sig
-        for sig in signames
-        if sig in dir(signal)
-    }
+    keepers = ["SIG%s" % s for s in keepers] if keepers else ()
+    sigstrs = set("SIG%s" % s for s in quitters) | set(keepers)
 
-    def handle_stay_signal(signo, frame):
-        print(
-            "\nReceived {!r} from controlling terminal; "
-            "ignoring...".format(numxsig[signo]),
-            file=sys.stderr,
-        )
-        return 0
+    numxsig = {getattr(signal, sig): sig for sig in sigstrs}
+    rcvdmsg = "\nReceived %s from controlling terminal."
+    debug = config["DEBUG"]
 
-    def handle_quit_signal(signo, frame):
-        # This just calls ``socket.close()`` (rather than shutdown)
+    def handle_stay_signal(signo, _):
+        msg = rcvdmsg % (numxsig[signo])
+        print("%s Ignoring..." % msg, file=sys.stderr)
+        sys.stderr.flush()  # py27
+        return 0  # ?
+
+    def handle_quit_signal(signo, _):
+        # This just calls ``socket.close()`` rather than shutdown
         server.server_close()
-        msg = "\nReceived %r, {} server, quitting..." % numxsig[signo]
-        if hasattr(server.socket, "_closed"):
-            print(
-                msg.format(
-                    "successfully closed"
-                    if server.socket._closed
-                    else "FAILED TO CLOSE"
-                ),
-                file=sys.stderr,
-            )
-        else:
-            print(
-                msg.format(
-                    "successfully closed"
-                    if "closedsocket" in repr(server.socket._sock)
-                    else "FAILED TO CLOSE"
-                ),
-                file=sys.stderr,
-            )
+        msg = rcvdmsg % (numxsig[signo])
+        res = ""
+        if debug:
+            res = ("FAILED TO CLOSE", "successfully closed")
+            if hasattr(server.socket, "_closed"):
+                res = res[server.socket._closed]
+            else:
+                res = res["closedsocket" in repr(server.socket._sock)]
+        print("%s Quitting...%s." % (msg, res), file=sys.stderr)
+        sys.stderr.flush()
         sys.exit(0)
 
     for num, name in numxsig.items():
