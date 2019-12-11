@@ -442,7 +442,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self.docroot = config["DOCROOT"]
         self.git_exec_path = get_libexec_dir()
         self.auth_dict = get_auth_dict(config["AUTHFILE"])
-        self._auth_envars = {}
+        self.auth_env = {}
         super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
     def dlog(self, heading, **kwargs):
@@ -506,7 +506,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
 
         abspath = self._joined(self.path)
         config["DEBUG"] and self.dlog(
-            "Read content", request_body=request_body, abspath=abspath
+            "read", request_body=request_body, abspath=abspath
         )
         contype = self.headers.get("content-type").lower()
 
@@ -543,7 +543,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             )
             return False
 
-        config["DEBUG"] and self.dlog("created new repo", stdout=_stdout)
+        config["DEBUG"] and self.dlog("git-init", stdout=_stdout)
         self._send_header_only(HTTPStatus.CREATED, "Successfully created repo")
         return True
 
@@ -662,12 +662,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         # trailing slash for dirs below DOCROOT, if an html directory listing
         # is to be generated and returned.  Otherwise, it responds with a 301
         # MOVED_PERMANENTLY.
-        self._auth_envars.clear()
+        self.auth_env.clear()
 
         if not self.auth_dict:
             return rv
         elif not sys.platform.startswith("linux"):
-            self.log_error("Auth options are Linux only")
+            self.log_error("E: auth options are Linux only")
             return rv
 
         # For GET and HEAD, this should give an fs path on UNIX
@@ -718,7 +718,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             return rv
 
         secdict = self.get_passwd_info(secretlines)
-        # self.dlog("send_head - secdict", **secdict)
+
         authorization = self.headers.get("authorization")
         #
         if not authorization:
@@ -730,7 +730,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             self.wfile.flush()
             return False
 
-        config["DEBUG"] and self.dlog("auth string sent: %r" % authorization)
         authorization = authorization.split()
 
         try:
@@ -747,7 +746,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             self.send_error(HTTPStatus.NOT_ACCEPTABLE, msg)
             return False
 
-        self._auth_envars["AUTH_TYPE"] = authtype
+        self.auth_env["AUTH_TYPE"] = authtype
         import base64
         import binascii
 
@@ -757,13 +756,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         except (binascii.Error, UnicodeError):
             pass
         else:
-            config["DEBUG"] and self.dlog(
-                "processed auth: {!r}".format(authorization)
-            )
+            config["DEBUG"] and self.dlog("auth", authorization=authorization)
             if self.verify_pass(secdict[username], password):
                 if realaccount:
-                    # FIXME don't update this proc's environment
-                    self._auth_envars["REMOTE_USER"] = username
+                    # FIXME use getent, etc. to check against /etc/passwd
+                    raise RuntimeError("Not implemented")
+                self.auth_env["REMOTE_USER"] = username
                 return rv
             self.send_error(
                 HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -787,15 +785,17 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if rv is not True:
             return rv
 
-        if self.cipher:  # XXX why is this here?
-            config["DEBUG"] and self.dlog("SSL info", cipher=self.cipher)
+        if config["DEBUG"]:
+            out = {
+                k: v
+                if type(v) in (int, float, bytes, type(None), str)
+                else str(v) for k, v in vars(self).items()
+            }
+            self.dlog("top", **out)
+            self.dlog("headers", **self.headers)
 
         # Allow SimpleHTTPRequestHandler to attempt fulfilling
         if not is_ghb_bound(self.command, self.path):
-            if config["DEBUG"]:
-                out = dict(vars(self))
-                out["headers"] = dict(self.headers._headers)
-            config["DEBUG"] and self.dlog("Onetime deal", **out)
             authd = self.handle_auth(rv)
             if authd and self.command == "POST":
                 if self.path.endswith(".git"):
@@ -827,18 +827,119 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if self.command == "GET":
             assert not self.get_objects_re.match(result["PATH_INFO"])
 
-        config["DEBUG"] and self.dlog("Initial parse", result=result)
-        self.git_env = result
+        config["DEBUG"] and self.dlog("determine_env_vars()", **result)
+
+        try:
+            from types import MappingProxyType
+        except ImportError:
+            self.git_env = result
+        else:
+            self.git_env = MappingProxyType(result)
 
         # TODO use git_env in auth
         return self.handle_auth(True)
 
+    def _populate_envvars(self):
+        """Return CGI-related env vars
+
+        Mostly straight from ``CGIHTTPRequestHandler.run_cgi``.
+        This takes request header fields and parsed-path info and
+        sets env vars required by rfc3875_ and some HTTP ones.
+
+        .. _rfc3875: https://tools.ietf.org/html/rfc3875#section-4.1
+        """
+        full_env = dict(os.environ)
+
+        # As required by git-http-backend(1); These never change.
+        cgi_env = dict(self.git_env)
+        cgi_env["GIT_HTTP_EXPORT_ALL"] = ""
+
+        cgi_env.update(self.auth_env)
+        # FIXME previous comment said, "Fallback for when auth isn't used,"
+        # but that implies auth is mandatory, which it's not
+        if self.path.endswith("git-receive-pack"):
+            cgi_env.setdefault("REMOTE_USER", full_env.get("USER", "nobody"))
+
+        # Vanilla from here on down
+        always = {
+                "SCRIPT_NAME": "git-http-backend",
+                "SERVER_SOFTWARE": self.version_string(),
+                "SERVER_NAME": self.server.server_name,
+                "GATEWAY_INTERFACE": "CGI/1.1",
+                "SERVER_PROTOCOL": self.protocol_version,
+                "SERVER_PORT": str(self.server.server_port),
+                "REQUEST_METHOD": self.command,
+                "REMOTE_ADDR": self.client_address[0],
+            }
+        cgi_env.update(always)
+
+        if hasattr(self.headers, "get_content_type"):
+            cgi_env["CONTENT_TYPE"] = self.headers.get(
+                "content-type", self.headers.get_content_type()
+            )
+        else:  # 27
+            cgi_env["CONTENT_TYPE"] = (
+                self.headers.typeheader or self.headers.type
+            )
+
+        length = self.headers.get("content-length")
+        if length:
+            cgi_env["CONTENT_LENGTH"] = length
+
+        referer = self.headers.get("referer")
+        if referer:
+            cgi_env["HTTP_REFERER"] = referer
+
+        accept = []
+        # Actual type is X-<custom>
+        for line in self.headers.getallmatchingheaders("accept"):
+            if line[:1] in "\t\n\r ":
+                accept.append(line.strip())
+            else:
+                accept += accept + line[7:].split(",")
+        cgi_env["HTTP_ACCEPT"] = ",".join(accept)
+
+        ua = self.headers.get("user-agent")
+        if ua:
+            cgi_env["HTTP_USER_AGENT"] = ua
+
+        if hasattr(self.headers, "get_all"):
+            co = filter(None, self.headers.get_all("cookie", []))
+        else:
+            co = filter(None, self.headers.getheaders("cookie"))
+        cookie_str = ", ".join(co)
+        if cookie_str:
+            cgi_env["HTTP_COOKIE"] = cookie_str
+
+        config["DEBUG"] and self.dlog("envvars", **cgi_env)
+
+        full_env.update(cgi_env)
+        # 4.1 says: "an optional meta-variable may be omitted (left unset) if
+        # its value is NULL" (a zero-length string).
+        #
+        # EDIT: upstream includes CONTENT_LENGTH here but it has been removed
+        # below. The RFC says it can be NULL but also says it MUST be set IFF
+        # content exists (meaning unset otherwise). Since we only read what's
+        # reported by the request (and discard the rest), there's no sense in
+        # using a fallback, no?
+        rfcvars = (
+            "QUERY_STRING",
+            "REMOTE_HOST",  # SHOULD (can also be REMOTE_HOST)
+            "HTTP_USER_AGENT",
+            "HTTP_COOKIE",
+            "HTTP_REFERER",
+        )
+        for k in rfcvars:
+            full_env.setdefault(k, "")
+
+        return full_env
+
     def run_cgi(self):
-        """Run git-http-backend
+        """Send input to git-http-backend, return output to client
 
         GnuTLS issue
         ~~~~~~~~~~~~
-        In Debian (and probably Ubuntu), both curl and git are built
+        On Debian (and probably Ubuntu), both curl and git are built
         against GnuTLS, which raises error -110: "the TLS connection was
         non-properly terminated." So, either http-backend isn't sending
         ``Content-Length`` or it's getting lost somewhere. Looking at
@@ -854,127 +955,46 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         .. _source: https://github.com/git/git/http-backend.c
         .. _spec: https://tools.ietf.org/html/rfc2616#section-14.10
         """
-        env = dict(os.environ)
-        env.update(self.git_env)
-
-        # As required by git-http-backend(1); These never change.
-        env["GIT_HTTP_EXPORT_ALL"] = ""
-        assert env["PATH_INFO"]
-        assert env["PATH_TRANSLATED"]
-        assert "QUERY_STRING" in env
-
-        # XXX was previously assumed only ``git-receive-pack`` required
-        # REMOTE_USER, but this might not be true. Not sure whether this is
-        # handled by the remote git-exec program or the os or the server.
-        if self.path.endswith("git-receive-pack"):
-            # Fallback for when auth isn't used, but any value is misleading
-            env.setdefault("REMOTE_USER", env.get("USER", "unknown"))
-
-        # From here, it's pretty much CGIHTTPRequestHandler.run_cgi
-
-        # Reference: http://hoohoo.ncsa.uiuc.edu/cgi/env.html
-        env.update(
-            {
-                "SCRIPT_NAME": "git-http-backend",
-                "SERVER_SOFTWARE": self.version_string(),
-                "SERVER_NAME": self.server.server_name,
-                "GATEWAY_INTERFACE": "CGI/1.1",
-                "SERVER_PROTOCOL": self.protocol_version,
-                "SERVER_PORT": str(self.server.server_port),
-                "REQUEST_METHOD": self.command,
-                "REMOTE_ADDR": self.client_address[0],
-            }
-        )
-        if hasattr(self.headers, "get_content_type"):
-            env["CONTENT_TYPE"] = self.headers.get(
-                "content-type", self.headers.get_content_type()
-            )
-        else:
-            env["CONTENT_TYPE"] = self.headers.typeheader or self.headers.type
-        length = self.headers.get("content-length")
-        if length:
-            env["CONTENT_LENGTH"] = length
-        referer = self.headers.get("referer")
-        if referer:
-            env["HTTP_REFERER"] = referer
-        accept = []
-        # Actual content type is an X-<custom>
-        for line in self.headers.getallmatchingheaders("accept"):
-            if line[:1] in "\t\n\r ":
-                accept.append(line.strip())
-            else:
-                accept = accept + line[7:].split(",")
-        env["HTTP_ACCEPT"] = ",".join(accept)
-        ua = self.headers.get("user-agent")
-        if ua:
-            env["HTTP_USER_AGENT"] = ua
-        if hasattr(self.headers, "get_all"):
-            co = filter(None, self.headers.get_all("cookie", []))
-        else:
-            co = filter(None, self.headers.getheaders("cookie"))
-        cookie_str = ", ".join(co)
-        if cookie_str:
-            env["HTTP_COOKIE"] = cookie_str
-        #
-        config["DEBUG"] and self.dlog("headers", **self.headers)
-
-        # XXX Other HTTP_* headers
-        # Since we're setting the env in the parent, provide empty
-        # values to override previously set values
-        rfcvars = (
-            "QUERY_STRING",
-            "REMOTE_HOST",
-            "CONTENT_LENGTH",
-            "HTTP_USER_AGENT",
-            "HTTP_COOKIE",
-            "HTTP_REFERER",
-        )
-        for k in rfcvars:
-            env.setdefault(k, "")
-
-        # Env vars required by ``git-http-backend`` and/or rfc3875
-        if config["DEBUG"]:
-            _prees = ("QUERY_", "PATH_", "GIT_", "REMOTE_")
-            _keys = (
-                k
-                for k in env
-                if k in rfcvars or any(k.startswith(p) for p in _prees)
-            )
-            self.dlog("envvars", **{k: env[k] for k in _keys})
+        env = self._populate_envvars()
 
         self.send_response(HTTPStatus.OK, "Script output follows")
         if hasattr(self, "flush_headers"):
             self.flush_headers()
 
         try:
-            nbytes = int(length)
+            nbytes = int(env.get("CONTENT_LENGTH", 0))
         except (TypeError, ValueError):
             nbytes = 0
 
+        backend_input = self.consume_and_exhaust(nbytes) or None
+        if backend_input is None:
+            assert "CONTENT_LENGTH" not in env
+
         cmdline = [os.path.join(self.git_exec_path, "git-http-backend")]
         proc = Popen(cmdline, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
-        stdout, stderr = proc.communicate(self.consume_and_exhaust(nbytes))
+        stdout, stderr = proc.communicate(input=backend_input)
 
         proc.stderr.close()
         proc.stdout.close()
-        assert proc.returncode is not None
-        status = proc.returncode
-        if stderr:
-            self.log_error("E: Got unexpected stderr: %r", stderr)
-        if status:
-            self.log_error("CGI script exit status %#x", status)
-        else:
-            config["DEBUG"] and self.dlog("CGI script exited OK")
 
         # See note in docstring re GnuTLS and Content-Length
         hdr, _, payload = stdout.partition(b"\r\n\r\n")
-        if b"Content-Length" in hdr:
-            self.log_error("W: 'Content-Length' already present!: %r", hdr)
+        if self.command == "GET" and b"Content-Length" in hdr:
+            self.log_error("W: 'Content-Length' in header from cgi: %r", hdr)
 
         self.send_header("Content-Length", len(payload))
         if hasattr(self, "flush_headers"):
             self.flush_headers()
         self.wfile.write(stdout)
+
+        assert proc.returncode is not None  # possible w. concurrent variants
+        status = proc.returncode
+        if stderr:  # also impossible?
+            self.log_error("E: Got unexpected stderr: %r", stderr)
+        if status:
+            self.log_error("E: CGI script exit status %#x", status)
+        else:
+            config["DEBUG"] and self.dlog("CGI script exited OK")
 
 
 def register_signals(server, quitters, keepers=None):
