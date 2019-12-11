@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-r"""Usage::
-
+"""Usage::
+\x0c
     python3 emergency_git_server.py [DOCROOT]
 
         DOCROOT
@@ -19,8 +19,7 @@ r"""Usage::
             IP address or hostname; defaults to localhost
 
         _PORT <port>
-            Port number; defaults to 8000 (probably a good idea to keep
-            it above 1023)
+            Port number; defaults to 8000 (may need to be above 1023)
 
         _LOGFILE <path>
             Redirect all server messages (from standard error) to path;
@@ -74,7 +73,7 @@ r"""Usage::
 
         _DHPARAMS <path>
             Path to an optional DH parameter file, also in PEM format.
-
+\x0c
 
 Notes
 -----
@@ -82,38 +81,19 @@ Notes
 This is a minimal, sequential, "single-serving" Git server geared toward
 emergency use, ad hoc experimentation, and basic Git education. General use is
 strongly discouraged, not least because of a total lack of attention paid to
-matters of security and performance, which completely overshadow the various
-limitations and vulnerabilities laid out in ``http.server``, ``socketserver``,
-and related modules upon which this is based (mostly regarding the use of
-blocking sockets and file-like objects, and known risks like arbitrary/remote
-code injection/execution.)
+matters of security and performance.
 
-While it's possible, say, to run this behind a reverse proxy to ensure more
-legit auth/auth and TLS handling, that's really missing the point. Faster,
-lighter, and more robust options exist, and some don't rely on a local git
-installation. At the very least, you'd want something that supports some flavor
-of concurrency. Professional tools combining libgit2 with twisted or gevent or
-asyncio do exactly this (not to mention those offered by other languages).
-
-If vast portions of this script come off as roundabout and confusing, that's in
-part due to these factors:
-
-1. A fair bit of request twiddling is necessary to conform to the traditional
-   CGI interface presented by the git-http-backend_ utility, the reference
-   implementation for CGI scripts that comes standard in most Git installations
-2. Sheer ignorance/incompetence on the author's part regarding compatibility
-   concerns and standards conformance (spec_), a deficiency that's inspired the
-   kitchen-sink approach taken below
-
-The rest of these notes address some quirks encountered in delegating to
-git-http-backend. It should be of no interest to most users.
+While it's possible, say, to run this behind a reverse proxy for more legit
+auth/auth and TLS, at that point, you might as well go for cgit, GitLab, etc.,
+which are all just a ``docker-run`` away.
 
 
 Dealing with git-http-backend
------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Confusingly, Git's client-side commands utilize at least two different URL
-request syntaxes re CGI scripts.
+The following should be of no interest to most users.  Confusingly, Git's
+client-side commands utilize at least two different URL request syntaxes re CGI
+scripts.
 
 1. ``/git_root/myrepo.git/info/refs?service=git-cmd``
 2. ``/git_root/myrepo.git/git-cmd``
@@ -147,7 +127,7 @@ two environment variables::
 .. _git-http-backend: https://github.com/git/git
    /Documentation/git-http-backend.txt
 
-"""  # ^~~~ contains hidden form-feed (0x0c FF) chars around usage section
+"""
 
 # Author: Jane Soko
 # License: Apache License 2.0
@@ -1070,13 +1050,12 @@ def serve(server_class, name="Git services", context=None):
     """
     from time import strftime
 
-    #
     server = server_class(
         (config["HOST"], config["PORT"]), HTTPBackendHandler, context
     )
-    #
+
     register_signals(server, ("TERM", "HUP", "INT"), ("TSTP", "TTOU", "TTIN"))
-    #
+
     # Copy fmt from ``BaseHTTPRequestHandler.log_message``
     bookend_fmt = "{0} - - [{2}] {3} serving %s on {0} over port {1}" % name
     time_fmt = "%d/%b/%Y %H:%M:%S"
@@ -1095,7 +1074,7 @@ def serve(server_class, name="Git services", context=None):
     if not config["LOGFILE"]:
         print("\n{}\n".format("Hit Ctrl-C to exit."), file=sys.stderr)
     sys.stderr.flush()
-    #
+
     try:
         server.serve_forever()
     finally:
