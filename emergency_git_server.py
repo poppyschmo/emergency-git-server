@@ -151,15 +151,11 @@ from subprocess import check_output, Popen, PIPE, CalledProcessError
 if sys.version_info < (3, 0):
     import httplib as HTTPStatus
     from future_builtins import filter
-    from CGIHTTPServer import CGIHTTPRequestHandler, _url_collapse_path
+    from CGIHTTPServer import CGIHTTPRequestHandler
     from BaseHTTPServer import HTTPServer
 else:
     from http import HTTPStatus
-    from http.server import (
-        CGIHTTPRequestHandler,
-        HTTPServer,
-        _url_collapse_path,
-    )
+    from http.server import CGIHTTPRequestHandler, HTTPServer
 
 __version__ = "0.0.8"
 
@@ -209,6 +205,64 @@ def get_auth_dict(authfile):
     else:
         outdict = json.loads(authfile)
     return outdict
+
+
+def url_collapse_path(uripath):
+    """Mimic standard lib's _url_collapse_path() but return a tuple
+
+    That is, a tuple of path, trailing slash, everything else (query and
+    fragment).
+
+    The only other difference is that the path component will have at
+    most one leading slash. The upstream namesake double-prepends leading
+    slashes for slug-only paths (leafs), even when they start with a slash, so
+    "/foo.git" and "foo.git" both become "//foo.git".
+
+    """
+    import posixpath
+    try:
+        from urllib.parse import unquote
+    except ImportError:
+        from urllib import unquote
+
+    # No catch, *all, destructuring in py27
+    path, sep, rest = uripath.partition('?')
+    if not any((sep, rest)):
+        path, sep, rest = path.partition('#')
+
+    trailing_slash = "/" if path.rstrip().endswith('/') else ""
+
+    try:
+        path = unquote(path, errors='surrogatepass')
+    except (UnicodeDecodeError, TypeError):
+        path = unquote(path)
+    path = posixpath.normpath(path)
+
+    return (path, trailing_slash, "".join((sep, rest)))
+
+
+def translate_path(basedir, uripath):
+    """Interpret URI path as fs path under basedir, return abspath.
+
+    See ``http.server.SimpleHTTPRequestHandler.translate_path``
+
+    This is from the 3.7 version but uses explicit arg basedir instead
+    of the current directory.
+
+    """
+    assert os.path.isabs(basedir)
+    path, trailing_slash, _ = url_collapse_path(uripath)
+
+    words = (
+        w for w in path.split('/') if
+        w
+        and not os.path.dirname(w)  # doesn't contain a /
+        and w not in (os.curdir, os.pardir)  # and is not . or ..
+    )
+    path = os.path.join(basedir, *words)
+    if trailing_slash:
+        path += os.path.sep
+    return path
 
 
 def is_repo(abspath):
@@ -494,9 +548,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         return data
 
     def _joined(self, path):
-        abspath = os.path.normpath(os.path.join(self.docroot, path.strip("/")))
-        compre = os.path.commonprefix([self.docroot, abspath])
-        assert compre == self.docroot, locals()
+        abspath = translate_path(self.docroot, path)
+        compre = os.path.commonprefix((self.docroot, abspath))
+        assert compre == self.docroot
         return abspath
 
     def _send_header_only(self, code, message):
@@ -627,7 +681,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         elif not sys.platform.startswith("linux"):
             raise RuntimeError("Auth options are Linux only")
 
-        collapsed_path = _url_collapse_path(self.path)
+        # For GHB-related requests, this will end with query or fake leaf
+        collapsed_path = "".join(url_collapse_path(self.path))
 
         # Can't continue without knowing the repo path
         if self.command == "POST":
@@ -647,12 +702,15 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 break
         # Also asserts record exists
         realm_info = self.auth_dict[maybe_restricted_path]
-        is_protected = realm_info.get("privaterepo", is_protected)
-        if is_protected is False and not collapsed_path.endswith(
-            "git-receive-pack"
-        ):
-            assert collapsed_path.endswith("git-upload-pack"), collapsed_path
-            return True
+
+        # Allow fetching from protected GHB-related realms that aren't private
+        if is_ghb_bound(self.command, self.path):
+            is_protected = realm_info.get("privaterepo", is_protected)
+            if is_protected is False and not collapsed_path.endswith(
+                "git-receive-pack"
+            ):
+                assert collapsed_path.endswith("git-upload-pack"), locals()
+                return True
 
         description = realm_info.get("description", "Basic auth requested")
 

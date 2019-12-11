@@ -109,3 +109,49 @@ def test_determine_env_vars(path_data, tmpdir):
     assert env["PATH_TRANSLATED"] == data["PATH_TRANSLATED"]
     assert env["QUERY_STRING"] == data["QUERY_STRING"]
     assert env.get("GIT_NAMESPACE") == data.get("GIT_NAMESPACE")
+
+
+@pytest.mark.parametrize("vs", [
+    ("/foo/repo.git", "/foo/repo.git", "/foo/repo.git"),
+    ("foo/repo.git", "foo/repo.git", "/foo/repo.git"),
+    ("/repo.git", "/repo.git", "//repo.git"),
+    ("repo.git", "repo.git", "//repo.git"),
+    # EXACTLY same as above but with trailing slash (could add another param
+    # but helps to see because upstream is quirky)
+    ("/foo/repo.git/", "/foo/repo.git/", "/foo/repo.git/"),
+    ("foo/repo.git/", "foo/repo.git/", "/foo/repo.git/"),
+    ("/repo.git/", "/repo.git/", "/repo.git/"),
+    ("repo.git/", "repo.git/", "/repo.git/"),
+])
+@pytest.mark.parametrize("query", ["", "?a=b"])
+@pytest.mark.parametrize("frag", ["", "#bar"])
+def test_url_collapse_path(vs, query, frag):
+    from emergency_git_server import url_collapse_path
+
+    try:
+        from CGIHTTPServer import _url_collapse_path
+    except ImportError:
+        from http.server import _url_collapse_path
+
+    upstream = _url_collapse_path
+
+    if query:
+        vs = ("%s%s" % (s, query) for s in vs)
+    if frag:
+        vs = ("%s%s" % (s, frag) for s in vs)
+
+    give, ours, them = vs
+
+    path, sep, rest = url_collapse_path(give)
+
+    assert rest == query + frag
+
+    assert them == upstream(give)
+    assert ours == "".join((path, sep, rest))
+
+    # General rule for upstream:
+    import re
+    if "/" not in give[1:]:
+        assert re.match(r"^//[^/].+", them)
+    else:
+        assert re.match(r"^/[^/].+", them)
