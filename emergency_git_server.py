@@ -445,26 +445,26 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self.auth_env = {}
         super(HTTPBackendHandler, self).__init__(*args, **kwargs)
 
-    def dlog(self, heading, **kwargs):
-        """ This prints concatenated args and pretty-prints kwargs. It
-        uses the ``super().log_message`` method, which just prints to
-        stderr without summoning the logging module.
+    def dlog(self, tag, **kwargs):
+        """Print one k/v pair per line below standard heading
+
+        Calls. ``.log_message`` to do the actual printing.
+
         """
         if config["DEBUG"] is not True:
             raise RuntimeError("DEBUG is OFF but dlog called")
         caller = sys._getframe().f_back.f_code.co_name
-        out = ["{}()".format(caller), " - "]
-        if heading:
-            out.append(heading)
+        first = "{}()".format(caller)
+        if tag:
+            first = "{} - {}".format(first, tag)
+        out = [first]
         if kwargs:
             maxlen = max(len(k) for k in kwargs) + 1
             out += [
-                "\n{:2}{:<{w}} {!r}".format("", k + ":", v, w=maxlen)
+                "{:2}{:<{w}} {!r}".format("", "%s:" % k, v, w=maxlen)
                 for k, v in kwargs.items()
             ]
-        # ``BaseHTTPRequestHandler.log_message`` takes printf syntax, so just
-        # concat, then disregard entirely. A stray ``%s`` shouldn't bother.
-        self.log_message("".join(out))
+        self.log_message("\n".join(out))
 
     def consume_and_exhaust(self, length=None):
         """Return up to length bytes from remote and discard the rest.
@@ -543,7 +543,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             )
             return False
 
-        config["DEBUG"] and self.dlog("git-init", stdout=_stdout)
+        config["DEBUG"] and self.dlog(
+            "git-init", stdout=_stdout, new_repo=abspath
+        )
         self._send_header_only(HTTPStatus.CREATED, "Successfully created repo")
         return True
 
@@ -786,12 +788,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             return rv
 
         if config["DEBUG"]:
-            out = {
-                k: v
-                if type(v) in (int, float, bytes, type(None), str)
-                else str(v) for k, v in vars(self).items()
-            }
-            self.dlog("top", **out)
+            self.dlog("top", **dict(vars(self)))
             self.dlog("headers", **self.headers)
 
         # Allow SimpleHTTPRequestHandler to attempt fulfilling
@@ -994,7 +991,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if status:
             self.log_error("E: CGI script exit status %#x", status)
         else:
-            config["DEBUG"] and self.dlog("CGI script exited OK")
+            config["DEBUG"] and self.dlog("subprocess", exit_status=status)
 
 
 def register_signals(server, quitters, keepers=None):

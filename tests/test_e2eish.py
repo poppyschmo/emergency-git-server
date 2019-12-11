@@ -755,8 +755,4 @@ def test_create_ioset(testdir):
         return
     collected = dumper.collect_picks(*picks)
     assert collected
-
-    import json
-
-    with testdir.tmpdir.join("collected.json").open("w") as flow:
-        json.dump(collected, flow, indent=2)
+    dumper.save_as_json(testdir.tmpdir.join("collected.json"))
