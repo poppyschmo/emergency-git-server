@@ -72,57 +72,12 @@
 Notes
 -----
 
-This is a minimal, sequential, "single-serving" Git server geared toward
-emergency use, ad hoc experimentation, and basic Git education. General use is
-strongly discouraged, not least because of a total lack of attention paid to
-matters of security and performance.
-
-While it's possible, say, to run this behind a reverse proxy for more legit
-auth/auth and TLS, it's better to opt for a real server like cgit, which is
-just a ``docker-run`` away.
-
-
-Dealing with git-http-backend
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The following should be of no interest to most users.  Confusingly, Git's
-client-side commands utilize at least two different URL request syntaxes re CGI
-scripts.
-
-1. ``/git_root/myrepo.git/info/refs?service=git-cmd``
-2. ``/git_root/myrepo.git/git-cmd``
-
-Here, ``git_root`` is merely a stand-in for the leading components of the
-target Git repo's URI. The first thing to note is that the main CGI command
-spawned by the server as a child process never changes::
-
-    /usr/libexec/git-core/git-http-backend
-
-This is sometimes exported as ``$SCRIPT_FILENAME``, along with a shorter,
-tail-only (basename) version in ``$SCRIPT_NAME``, which would expand to
-``git-http-backend``. Likewise, ``$GIT_PROJECT_ROOT`` is always set to::
-
-    $DOCROOT/git_root
-
-where ``$DOCROOT`` is something like ``/var/www`` and ``git_root`` the
-intermediate dirs between ``$DOCROOT`` and the Git repo. The only real
-difference between forms (1) and (2) lies in how they impact the value of
-two environment variables::
-
-    # (1) GET /git_root/myrepo.git/info/refs?service=git-upload-pack HTTP/1.1
-    $PATH_INFO    == "/myrepo.git/info/refs"
-    $QUERY_STRING == "service=git-upload-pack"
-
-    # (2) POST /git_root/myrepo.git/git-upload-pack HTTP/1.1
-    $PATH_INFO    == "/myrepo.git/git-upload-pack"
-    $QUERY_STRING == ""
-
-.. _spec: http://www.ietf.org/rfc/rfc3875
-.. _git-http-backend: https://github.com/git/git
-   /Documentation/git-http-backend.txt
+This is a minimal, synchronous Git HTTP server for quick chores, local
+experiments, and Git tutorials. Deployment on the open web should not be
+attempted, not even behind a reverse proxy. Opt instead for a pro-quality
+"app," many of which are only a ``docker-run`` away.
 
 """
-
 # Author: Jane Soko
 # License: Apache License 2.0
 # Portions derived from Python modules may apply other terms.
@@ -133,8 +88,7 @@ two environment variables::
 #
 # TODO simplify auth handling and follow web standards
 #
-# TODO All HTTPStatus codes are naively assigned and largely misapplied. Use
-# official IANA RFC when revising.
+# TODO Properly apply HTTPStatus as per the RFC
 
 from __future__ import print_function
 from __future__ import unicode_literals

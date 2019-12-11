@@ -1,8 +1,53 @@
+"""
+
+The following should be of no interest to most users.
+
+
+Nots on git-http-backend
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Git's client-side ``*-pack`` commands use at least two different URL request
+styles re CGI scripts.
+
+1. ``/git_root/myrepo.git/info/refs?service=git-cmd``
+
+2. ``/git_root/myrepo.git/git-cmd``
+
+Here, ``git_root`` is merely a stand-in for the leading components of the
+target Git repo's URI. The first thing to note is that the main CGI command
+spawned by the server as a child process never changes::
+
+    /usr/libexec/git-core/git-http-backend
+
+This is sometimes exported as ``$SCRIPT_FILENAME``, along with a shorter,
+tail-only (basename) version in ``$SCRIPT_NAME``, which would expand to
+``git-http-backend``. Likewise, ``$GIT_PROJECT_ROOT`` is always set to::
+
+    $DOCROOT/git_root
+
+where ``$DOCROOT`` is something like ``/var/www`` and ``git_root`` the
+intermediate dirs between ``$DOCROOT`` and the Git repo. The only real
+difference between forms (1) and (2) lies in how they impact the value of
+two environment variables::
+
+    # (1) GET /git_root/myrepo.git/info/refs?service=git-upload-pack HTTP/1.1
+    $PATH_INFO    == "/myrepo.git/info/refs"
+    $QUERY_STRING == "service=git-upload-pack"
+
+    # (2) POST /git_root/myrepo.git/git-upload-pack HTTP/1.1
+    $PATH_INFO    == "/myrepo.git/git-upload-pack"
+    $QUERY_STRING == ""
+
+See also: `cgi spec`_ and man page for `git-http-backend`_.
+
+.. _`cgi spec`: http://www.ietf.org/rfc/rfc3875
+.. _`git-http-backend`: https://github.com/git/git
+   /Documentation/git-http-backend.txt
+
+"""
 import os
 import pytest
 from itertools import chain
-
-# pytestmark = pytest.mark.skip("wip")
 
 _data = {}
 
