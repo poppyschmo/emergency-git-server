@@ -193,7 +193,7 @@ def test_register_signals(testdir, request):
             if is_27:
                 chunk = os.read(proc.stderr.fileno(), 1024)
             else:
-                chunk = proc.stderr.read1()
+                chunk = proc.stderr.read1(1024)
             try:
                 expect.send(chunk)
             except StopIteration:
