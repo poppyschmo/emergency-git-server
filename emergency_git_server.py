@@ -578,7 +578,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         Intervening path components are created if they don't already
         exist.
         """
-        assert self.path.endswith(".git") and len(self.path) > 5
+        assert self.path.rstrip("/").endswith(".git") and len(self.path) > 5
 
         request_body = self.consume_and_exhaust()  # -> bytes
 
@@ -793,8 +793,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         # Allow SimpleHTTPRequestHandler to attempt fulfilling request
         if not is_ghb_bound(self.command, self.path):
             if self.command == "POST":
-                if self.path.endswith(".git"):
-                    self.maybe_create_repo()
+                if self.path.rstrip("/").endswith(".git"):
+                    if not config["ALLOW_CREATION"]:
+                        msg = "Repo creation is disabled"
+                        self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, msg)
+                    else:
+                        self.maybe_create_repo()
                 else:
                     msg = "Non-git POST only allowed when creating new repos"
                     self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, msg)
