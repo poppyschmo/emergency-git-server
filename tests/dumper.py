@@ -79,7 +79,7 @@ def collect_picks(*picks, include_all=False):
                 entry.update(config=call["kwargs"]["config"],
                              parts=call["kwargs"]["parts"],
                              command=call["kwargs"]["command"],
-                             path=call["kwargs"]["path"].replace("test_", ""))
+                             path=call["kwargs"]["path"])
             elif name == "handle_error":
                 assert tag == "exception"
                 # Gets axed unless include_all passed
@@ -88,7 +88,7 @@ def collect_picks(*picks, include_all=False):
                 if tag == "envvars":
                     assert "env" not in entry
                     entry.update(
-                        {k: v.replace(docroot, "$DOCROOT").replace("test_", "")
+                        {k: v.replace(docroot, "$DOCROOT")
                          for k, v in call["kwargs"].items() if k in envvars}
                     )
                     ns = call["kwargs"].get("GIT_NAMESPACE")
@@ -108,7 +108,7 @@ def save_as_json(path):
     from dumper import collect_picks, find_last_picks
     collected = collect_picks(*find_last_picks())
     with open(path, "w") as flow:
-        json.dump(collected, flow)
+        json.dump(collected, flow, separators=",:")
 
 
 def group_parts_by_existence(docroot, path):

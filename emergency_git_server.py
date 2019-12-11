@@ -326,7 +326,9 @@ def determine_env_vars(docroot, verb, uri, **config):
         assert exename == "git-receive-pack" or exename == "git-upload-pack"
 
     if config.get("ENFORCE_DOTGIT") is not False:  # None is True
-        assert repo.endswith(".git")
+        assert any(c.endswith(".git") for c in repo.split("/")), locals()
+    else:
+        assert repo.replace("/info/refs", "").strip("/"), locals()
 
     env["PATH_INFO"] = path.replace("/" + gitroot, "", 1) if gitroot else path
 
