@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""Usage::
 
@@ -182,8 +182,11 @@ if sys.version_info < (3, 0):
     from BaseHTTPServer import HTTPServer
 else:
     from http import HTTPStatus
-    from http.server import (CGIHTTPRequestHandler, HTTPServer,
-                             _url_collapse_path)
+    from http.server import (
+        CGIHTTPRequestHandler,
+        HTTPServer,
+        _url_collapse_path,
+    )
 
 __version__ = "0.0.8"
 
@@ -215,8 +218,10 @@ def get_libexec_dir():
         try:
             out_path = check_output("command -p git --exec-path".split())
         except FileNotFoundError:
-            print("Could not locate primary git program in $PATH",
-                  file=sys.stderr)
+            print(
+                "Could not locate primary git program in $PATH",
+                file=sys.stderr,
+            )
             raise
     else:
         out_path = out_path.decode().strip()
@@ -236,9 +241,8 @@ def get_auth_dict(authfile):
 
 def is_repo(abspath):
     """Predicate returning true if abspath is a GITDIR"""
-    if (
-        os.path.isfile(os.path.join(abspath, "HEAD"))
-        or os.path.isdir(os.path.join(abspath, "refs", "heads"))
+    if os.path.isfile(os.path.join(abspath, "HEAD")) or os.path.isdir(
+        os.path.join(abspath, "refs", "heads")
     ):
         return True
     return False
@@ -266,9 +270,8 @@ def _find_namespaces(env, config):
     for part in parts:
         if not part:
             continue
-        if (
-            part.endswith(".git")
-            or is_repo(os.path.join(env["GIT_PROJECT_ROOT"], part))
+        if part.endswith(".git") or is_repo(
+            os.path.join(env["GIT_PROJECT_ROOT"], part)
         ):
             break
         ns.append(part)
@@ -333,7 +336,7 @@ def is_ghb_bound(command, path):
     if command == "GET":
         tails = (
             "/info/refs?service=git-upload-pack",
-            "/info/refs?service=git-receive-pack"
+            "/info/refs?service=git-receive-pack",
         )
         return any(path.endswith(t) for t in tails)
 
@@ -387,8 +390,9 @@ class CtxServer(HTTPServer, object):
 
     def __init__(self, server_address, RequestHandlerClass, context=None):
         self.ssl_context = context
-        super(CtxServer, self).__init__(server_address, RequestHandlerClass,
-                                        bind_and_activate=True)
+        super(CtxServer, self).__init__(
+            server_address, RequestHandlerClass, bind_and_activate=True
+        )
 
     def _handle_request_noblock(self):
         """No idea how this really works. See superclass docstring.
@@ -402,9 +406,11 @@ class CtxServer(HTTPServer, object):
                 if self.ssl_context:
                     try:
                         request = self.ssl_context.wrap_socket(
-                            request, server_side=True)
+                            request, server_side=True
+                        )
                     except Exception as e:
                         import ssl
+
                         # Usually means client hasn't okay'd self-signed certs
                         if isinstance(e, ssl.SSLError):
                             print("%r" % e, file=sys.stderr)
@@ -431,8 +437,9 @@ class CtxServer(HTTPServer, object):
         # XXX workaround for the lack of a ``service_actions()`` hook in 2.7's
         # ``serve_forever`` loop. Unsure how safe this is. Unlike in py3, this
         # doesn't run between selector poll intervals (when fd is busy).
-        if (not hasattr(HTTPServer, "service_actions") and
-                hasattr(self, "service_actions")):
+        if not hasattr(HTTPServer, "service_actions") and hasattr(
+            self, "service_actions"
+        ):
             self.service_actions()
 
 
@@ -472,8 +479,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             out.append(heading)
         if kwargs:
             maxlen = max(len(k) for k in kwargs) + 1
-            out += ["\n{:2}{:<{w}} {!r}".format("", k + ":", v, w=maxlen) for
-                    k, v in kwargs.items()]
+            out += [
+                "\n{:2}{:<{w}} {!r}".format("", k + ":", v, w=maxlen)
+                for k, v in kwargs.items()
+            ]
         # ``BaseHTTPRequestHandler.log_message`` takes printf syntax, so just
         # concat, then disregard entirely. A stray ``%s`` shouldn't bother.
         self.log_message("".join(out))
@@ -482,7 +491,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         """Return up to length bytes from remote and discard the rest.
         """
         if length is None:
-            length = int(self.headers.get('content-length'))
+            length = int(self.headers.get("content-length"))
         data = self.rfile.read(length)
         # Bad content-length? (see comment in CGIHTTPRequestHandler.run_cgi)
         while select.select([self.rfile._sock], [], [], 0)[0]:
@@ -491,9 +500,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         return data
 
     def _joined(self, path):
-        abspath = os.path.normpath(
-            os.path.join(self.docroot, path.strip("/"))
-        )
+        abspath = os.path.normpath(os.path.join(self.docroot, path.strip("/")))
         compre = os.path.commonprefix([self.docroot, abspath])
         assert compre == self.docroot, locals()
         return abspath
@@ -520,9 +527,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
 
         abspath = self._joined(self.path)
         config["DEBUG"] and self.dlog(
-            'Read content', request_body=request_body, abspath=abspath
+            "Read content", request_body=request_body, abspath=abspath
         )
-        contype = self.headers.get('content-type').lower()
+        contype = self.headers.get("content-type").lower()
 
         def bail():
             if os.path.exists(abspath):
@@ -557,7 +564,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             )
             return False
 
-        config["DEBUG"] and self.dlog('created new repo', stdout=_stdout)
+        config["DEBUG"] and self.dlog("created new repo", stdout=_stdout)
         self._send_header_only(HTTPStatus.CREATED, "Successfully created repo")
         return True
 
@@ -625,12 +632,14 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         elif saved.startswith("{SHA}"):
             import base64
             import hashlib
+
             binpass = saved.partition("{SHA}")[-1].encode()
             binpass = base64.b64decode(binpass)
             if hashlib.sha1(received.encode()).digest() == binpass:
                 return True
         elif len(saved) == 13:
             import crypt
+
             if crypt.crypt(received, saved[:2]) == saved:
                 return True
         return False
@@ -642,7 +651,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         """
         secdict = {}
         for line in lines:
-            if ':' not in line:
+            if ":" not in line:
                 continue
             u, p = line.split(":")
             if p.startswith("$apr1") and self.has_openssl is None:
@@ -703,29 +712,30 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 break
         # Also asserts record exists
         realm_info = self.auth_dict[maybe_restricted_path]
-        is_protected = realm_info.get('privaterepo', is_protected)
-        if (
-            is_protected is False
-            and not collapsed_path.endswith("git-receive-pack")
+        is_protected = realm_info.get("privaterepo", is_protected)
+        if is_protected is False and not collapsed_path.endswith(
+            "git-receive-pack"
         ):
             assert collapsed_path.endswith("git-upload-pack"), collapsed_path
             return rv
 
-        description = realm_info.get('description', "Basic auth requested")
+        description = realm_info.get("description", "Basic auth requested")
         # XXX - this option is currently bunk, although it does trigger the
         # exporting of REMOTE_USER below, which the git exes seem to ignore.
         # If implementing, it would most likely be limited to unix systems
         # with read access to /etc/passwd and /etc/group. The actual modified
         # files would still end up being owned by the server process UID.
-        realaccount = realm_info.get('realaccount', config["REQUIRE_ACCOUNT"])
+        realaccount = realm_info.get("realaccount", config["REQUIRE_ACCOUNT"])
         try:
-            secretsfile = realm_info.get('secretsfile')
+            secretsfile = realm_info.get("secretsfile")
             with open(secretsfile) as f:
                 secretlines = f.readlines()
         except TypeError:
             # Could not read .htpasswd file
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR,
-                            "Application error looking up auth")
+            self.send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "Application error looking up auth",
+            )
             return rv
 
         secdict = self.get_passwd_info(secretlines)
@@ -734,8 +744,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         #
         if not authorization:
             self.send_response(HTTPStatus.UNAUTHORIZED)
-            self.send_header("WWW-Authenticate",
-                             'Basic realm="%s"' % description)
+            self.send_header(
+                "WWW-Authenticate", 'Basic realm="%s"' % description
+            )
             self.end_headers()
             self.wfile.flush()
             return False
@@ -746,8 +757,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         try:
             authtype, authval = authorization
         except Exception:
-            self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
-                            "Problem reading authorization")
+            self.send_error(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "Problem reading authorization",
+            )
             return False
 
         if authtype.lower() != "basic":
@@ -758,9 +771,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self._auth_envars["AUTH_TYPE"] = authtype
         import base64
         import binascii
+
         try:
-            authorization = base64.b64decode(authval.encode('ascii'))
-            username, password = authorization.decode('ascii').split(':')
+            authorization = base64.b64decode(authval.encode("ascii"))
+            username, password = authorization.decode("ascii").split(":")
         except (binascii.Error, UnicodeError):
             pass
         else:
@@ -772,8 +786,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     # FIXME don't update this proc's environment
                     self._auth_envars["REMOTE_USER"] = username
                 return rv
-            self.send_error(HTTPStatus.UNPROCESSABLE_ENTITY,
-                            "Problem reading authorization")
+            self.send_error(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "Problem reading authorization",
+            )
             return False
 
         self.send_error(HTTPStatus.UNAUTHORIZED, "No permission")
@@ -814,11 +830,11 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         result = {}
         try:
             result = determine_env_vars(
-                self.docroot, verb=self.command,
-                uri=self.path, **config
+                self.docroot, verb=self.command, uri=self.path, **config
             )
         except Exception:
             import traceback
+
             self.log_error(
                 "\n".join(traceback.format_exception(*sys.exc_info()))
             )
@@ -878,55 +894,62 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         # From here, it's pretty much CGIHTTPRequestHandler.run_cgi
 
         # Reference: http://hoohoo.ncsa.uiuc.edu/cgi/env.html
-        env.update({
-            "SCRIPT_NAME": "git-http-backend",
-            'SERVER_SOFTWARE': self.version_string(),
-            'SERVER_NAME': self.server.server_name,
-            'GATEWAY_INTERFACE': 'CGI/1.1',
-            'SERVER_PROTOCOL': self.protocol_version,
-            'SERVER_PORT': str(self.server.server_port),
-            'REQUEST_METHOD': self.command,
-            'REMOTE_ADDR': self.client_address[0]
-        })
+        env.update(
+            {
+                "SCRIPT_NAME": "git-http-backend",
+                "SERVER_SOFTWARE": self.version_string(),
+                "SERVER_NAME": self.server.server_name,
+                "GATEWAY_INTERFACE": "CGI/1.1",
+                "SERVER_PROTOCOL": self.protocol_version,
+                "SERVER_PORT": str(self.server.server_port),
+                "REQUEST_METHOD": self.command,
+                "REMOTE_ADDR": self.client_address[0],
+            }
+        )
         if hasattr(self.headers, "get_content_type"):
-            env['CONTENT_TYPE'] = self.headers.get(
-                'content-type', self.headers.get_content_type()
+            env["CONTENT_TYPE"] = self.headers.get(
+                "content-type", self.headers.get_content_type()
             )
         else:
-            env['CONTENT_TYPE'] = (self.headers.typeheader or
-                                   self.headers.type)
-        length = self.headers.get('content-length')
+            env["CONTENT_TYPE"] = self.headers.typeheader or self.headers.type
+        length = self.headers.get("content-length")
         if length:
-            env['CONTENT_LENGTH'] = length
-        referer = self.headers.get('referer')
+            env["CONTENT_LENGTH"] = length
+        referer = self.headers.get("referer")
         if referer:
-            env['HTTP_REFERER'] = referer
+            env["HTTP_REFERER"] = referer
         accept = []
         # Actual content type is an X-<custom>
-        for line in self.headers.getallmatchingheaders('accept'):
+        for line in self.headers.getallmatchingheaders("accept"):
             if line[:1] in "\t\n\r ":
                 accept.append(line.strip())
             else:
-                accept = accept + line[7:].split(',')
-        env['HTTP_ACCEPT'] = ','.join(accept)
-        ua = self.headers.get('user-agent')
+                accept = accept + line[7:].split(",")
+        env["HTTP_ACCEPT"] = ",".join(accept)
+        ua = self.headers.get("user-agent")
         if ua:
-            env['HTTP_USER_AGENT'] = ua
+            env["HTTP_USER_AGENT"] = ua
         if hasattr(self.headers, "get_all"):
-            co = filter(None, self.headers.get_all('cookie', []))
+            co = filter(None, self.headers.get_all("cookie", []))
         else:
-            co = filter(None, self.headers.getheaders('cookie'))
-        cookie_str = ', '.join(co)
+            co = filter(None, self.headers.getheaders("cookie"))
+        cookie_str = ", ".join(co)
         if cookie_str:
-            env['HTTP_COOKIE'] = cookie_str
+            env["HTTP_COOKIE"] = cookie_str
         #
         config["DEBUG"] and self.dlog("headers", **self.headers)
 
         # XXX Other HTTP_* headers
         # Since we're setting the env in the parent, provide empty
         # values to override previously set values
-        rfcvars = ('QUERY_STRING', 'REMOTE_HOST', 'CONTENT_LENGTH',
-                   'HTTP_USER_AGENT', 'HTTP_COOKIE', 'HTTP_REFERER')
+        rfcvars = (
+            "QUERY_STRING",
+            "REMOTE_HOST",
+            "CONTENT_LENGTH",
+            "HTTP_USER_AGENT",
+            "HTTP_COOKIE",
+            "HTTP_REFERER",
+        )
         for k in rfcvars:
             env.setdefault(k, "")
 
@@ -934,8 +957,9 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if config["DEBUG"]:
             _prees = ("QUERY_", "PATH_", "GIT_", "REMOTE_")
             _keys = (
-                k for k in env if k in rfcvars or
-                any(k.startswith(p) for p in _prees)
+                k
+                for k in env
+                if k in rfcvars or any(k.startswith(p) for p in _prees)
             )
             self.dlog("envvars", **{k: env[k] for k in _keys})
 
@@ -948,7 +972,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         except (TypeError, ValueError):
             nbytes = 0
 
-        cmdline = [os.path.join(self.git_exec_path, 'git-http-backend')]
+        cmdline = [os.path.join(self.git_exec_path, "git-http-backend")]
         proc = Popen(cmdline, stdin=PIPE, stdout=PIPE, stderr=PIPE, env=env)
         stdout, stderr = proc.communicate(self.consume_and_exhaust(nbytes))
 
@@ -979,24 +1003,34 @@ def register_signals(server, quitters, keepers=None):
     The module's default behavior is to quit without teardown for
     certain "unknown" signals like USR1.
     """
-    quitters = (s.upper() if s.upper().startswith("SIG") else
-                "SIG" + s.upper() for s in quitters)
+    quitters = (
+        s.upper() if s.upper().startswith("SIG") else "SIG" + s.upper()
+        for s in quitters
+    )
     if keepers is not None:
-        keepers = [s.upper() if s.upper().startswith("SIG") else
-                   "SIG" + s.upper() for s in keepers]
+        keepers = [
+            s.upper() if s.upper().startswith("SIG") else "SIG" + s.upper()
+            for s in keepers
+        ]
     else:
         keepers = ()
     # This syntax is forbidden in Python 2.7: ``set((*quitters, *keepers))``
     signames = set(quitters) | set(keepers)
     import signal
+
     # Can also ``filter(None, Iterator)`` to get rid of falsey items
-    numxsig = {getattr(signal, sig, None): sig for sig in signames if
-               sig in dir(signal)}
+    numxsig = {
+        getattr(signal, sig, None): sig
+        for sig in signames
+        if sig in dir(signal)
+    }
 
     def handle_stay_signal(signo, frame):
-        print("\nReceived {!r} from controlling terminal; "
-              "ignoring...".format(numxsig[signo]),
-              file=sys.stderr)
+        print(
+            "\nReceived {!r} from controlling terminal; "
+            "ignoring...".format(numxsig[signo]),
+            file=sys.stderr,
+        )
         return 0
 
     def handle_quit_signal(signo, frame):
@@ -1004,12 +1038,23 @@ def register_signals(server, quitters, keepers=None):
         server.server_close()
         msg = "\nReceived %r, {} server, quitting..." % numxsig[signo]
         if hasattr(server.socket, "_closed"):
-            print(msg.format("successfully closed" if server.socket._closed
-                             else "FAILED TO CLOSE"), file=sys.stderr)
+            print(
+                msg.format(
+                    "successfully closed"
+                    if server.socket._closed
+                    else "FAILED TO CLOSE"
+                ),
+                file=sys.stderr,
+            )
         else:
-            print(msg.format("successfully closed" if "closedsocket" in
-                             repr(server.socket._sock) else "FAILED TO CLOSE"),
-                  file=sys.stderr)
+            print(
+                msg.format(
+                    "successfully closed"
+                    if "closedsocket" in repr(server.socket._sock)
+                    else "FAILED TO CLOSE"
+                ),
+                file=sys.stderr,
+            )
         sys.exit(0)
 
     for num, name in numxsig.items():
@@ -1024,6 +1069,7 @@ def serve(server_class, name="Git services", context=None):
     """This is basically just ``__main__`` from ``http.server``
     """
     from time import strftime
+
     #
     server = server_class(
         (config["HOST"], config["PORT"]), HTTPBackendHandler, context
@@ -1036,10 +1082,16 @@ def serve(server_class, name="Git services", context=None):
     time_fmt = "%d/%b/%Y %H:%M:%S"
     #
     host, port = server.socket.getsockname()
-    print(bookend_fmt.format(host, port, strftime(time_fmt), "Started"),
-          file=sys.stderr)
-    print("{} - - [{}] PID: {}, PPID: {}".format(
-        host, strftime(time_fmt), os.getpid(), os.getppid()), file=sys.stderr)
+    print(
+        bookend_fmt.format(host, port, strftime(time_fmt), "Started"),
+        file=sys.stderr,
+    )
+    print(
+        "{} - - [{}] PID: {}, PPID: {}".format(
+            host, strftime(time_fmt), os.getpid(), os.getppid()
+        ),
+        file=sys.stderr,
+    )
     if not config["LOGFILE"]:
         print("\n{}\n".format("Hit Ctrl-C to exit."), file=sys.stderr)
     sys.stderr.flush()
@@ -1047,14 +1099,18 @@ def serve(server_class, name="Git services", context=None):
     try:
         server.serve_forever()
     finally:
-        print("\n" + bookend_fmt.format(host, port, strftime(time_fmt),
-                                        "Stopped"), file=sys.stderr)
+        print(
+            "\n"
+            + bookend_fmt.format(host, port, strftime(time_fmt), "Stopped"),
+            file=sys.stderr,
+        )
         server.server_close()
 
 
 def set_ssl_context(certfile=None, keyfile=None, dhparams=None):
     """Verify certs exist on filesystem, return an SSL context object.
     """
+
     def verify(val):
         if val:
             fpath = os.path.expanduser(os.path.expandvars(val))
@@ -1072,18 +1128,23 @@ def set_ssl_context(certfile=None, keyfile=None, dhparams=None):
             pem = f.readlines()  # Can't just iter f, must expand/tee
             msg = None
             try:
-                k = next(pem.index(l) for l in pem if 'END PRIVATE' in l)
-                c = next(pem.index(l) for l in pem if 'CERTIFICATE' in l)
+                k = next(pem.index(l) for l in pem if "END PRIVATE" in l)
+                c = next(pem.index(l) for l in pem if "CERTIFICATE" in l)
             except StopIteration:
-                msg = ("Invalid certificate. Please set ``*_KEYFILE`` or "
-                       "provide a combined cert in PEM format.")
+                msg = (
+                    "Invalid certificate. Please set ``*_KEYFILE`` or "
+                    "provide a combined cert in PEM format."
+                )
             else:
                 if not k < c:
-                    msg = ("Invalid certificate. For combined PEM certs, "
-                           "the key must appear first.")
+                    msg = (
+                        "Invalid certificate. For combined PEM certs, "
+                        "the key must appear first."
+                    )
             if msg:
                 raise RuntimeError(msg)
     import ssl
+
     context = ssl.create_default_context(purpose=ssl.Purpose.CLIENT_AUTH)
     # Like ``SSLContext.set_default_verify_paths()``, ``set_ecdh_curve()``
     # doesn't exist in 3.5.x, at least not on Fedora's system python3.
@@ -1100,6 +1161,7 @@ def set_ssl_context(certfile=None, keyfile=None, dhparams=None):
 
 def validate_logpath(inpath=None, create=False, maxsize=2):
     import os
+
     outpath = None
     if inpath is not None:
         # On UNIX, write permissions of parent dir don't matter for
@@ -1114,7 +1176,7 @@ def validate_logpath(inpath=None, create=False, maxsize=2):
         else:
             return None
         # If attempting to support Windows, assume Python version >= 3.5
-        if os.path.getsize(outpath) > 2**20 * maxsize:
+        if os.path.getsize(outpath) > 2 ** 20 * maxsize:
             try:
                 os.truncate(outpath, 0)
             except AttributeError:
@@ -1141,8 +1203,10 @@ def main(**overrides):
 
     """
     if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
-        print("WARNING: untried on Python versions < 3.5, except for 2.7",
-              file=sys.stderr)
+        print(
+            "WARNING: untried on Python versions < 3.5, except for 2.7",
+            file=sys.stderr,
+        )
 
     if any(a.lstrip("-") in ("help", "h") for a in sys.argv[1:]):
         print(__doc__.split("\x0c")[1])  # long, autouse pager?
@@ -1152,7 +1216,8 @@ def main(**overrides):
     # os.path.realpath() might not be desirable in some situations.
     config["DOCROOT"] = os.path.abspath(
         sys.argv[1]
-        if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]) else "."
+        if len(sys.argv) > 1 and os.path.isdir(sys.argv[1])
+        else "."
     )
 
     # Options
@@ -1185,7 +1250,7 @@ def main(**overrides):
     context = set_ssl_context(
         certfile=config["CERTFILE"],
         keyfile=config["KEYFILE"],
-        dhparams=config["DHPARAMS"]
+        dhparams=config["DHPARAMS"],
     )
 
     if context and config["PORT"] == 8000:
@@ -1202,7 +1267,7 @@ def main(**overrides):
             sys.stderr.flush()
             sys.stdout.flush()
 
-    with open(logfile, 'a') as f:
+    with open(logfile, "a") as f:
         try:
             from contextlib import redirect_stderr, redirect_stdout
         except ImportError:
