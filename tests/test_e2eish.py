@@ -639,12 +639,16 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     twofer("git init")
     twofer("git add -A && git commit -m 'Init'")
     if create:
+        curlargs = ["curl"]
         if ssl:
-            pe.sendline(
-                "curl --insecure --include --data init=1 %s" % project_url
-            )
-        else:
-            pe.sendline("curl --include --data init=1 %s" % project_url)
+            curlargs += ["--insecure"]
+        if auth:
+            curlargs += ["--user", "scmbot"]
+        curlargs += ["--include", "--data", "init=1", project_url]
+        pe.sendline(" ".join(curlargs))
+        if auth:
+            pe.expect("password")
+            pe.sendline("changeme")
         pe.expect("created")
         pe.expect(prompt_re)
         twofer("git remote add origin {}".format(project_url))

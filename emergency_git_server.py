@@ -684,33 +684,24 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         # For GHB-related requests, this will end with query or fake leaf
         collapsed_path = "".join(url_collapse_path(self.path))
 
-        # Can't continue without knowing the repo path
-        if self.command == "POST":
-            # FIXME this is a joke
-            self.log_error("E: Auth checks not implemented for POST requests")
-            return True
-
-        is_protected = False
-        for maybe_restricted_path in self.auth_dict:
+        for maybe_restricted_path, realm_info in self.auth_dict.items():
             maybe_restricted_path = maybe_restricted_path.rstrip("/")
-            # FIXME use os.commonpath instead
             if (
                 collapsed_path == maybe_restricted_path
                 or collapsed_path.startswith(maybe_restricted_path + "/")
             ):
-                is_protected = True
                 break
-        # Also asserts record exists
-        realm_info = self.auth_dict[maybe_restricted_path]
+        else:
+            return True
 
         # Allow fetching from protected GHB-related realms that aren't private
-        if is_ghb_bound(self.command, self.path):
-            is_protected = realm_info.get("privaterepo", is_protected)
-            if is_protected is False and not collapsed_path.endswith(
-                "git-receive-pack"
-            ):
-                assert collapsed_path.endswith("git-upload-pack"), locals()
-                return True
+        if (
+                is_ghb_bound(self.command, self.path)
+                and not realm_info.get("privaterepo")
+                and not collapsed_path.endswith("git-receive-pack")
+        ):
+            assert collapsed_path.endswith("git-upload-pack"), locals()
+            return True
 
         description = realm_info.get("description", "Basic auth requested")
 
@@ -791,18 +782,23 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             self.dlog("top", **dict(vars(self)))
             self.dlog("headers", **self.headers)
 
-        # Allow SimpleHTTPRequestHandler to attempt fulfilling
+        if self.handle_auth() is not True:
+            # Error message already sent, so tell caller to close connection
+            return False
+
+        # Allow SimpleHTTPRequestHandler to attempt fulfilling request
         if not is_ghb_bound(self.command, self.path):
-            auth_verdict = self.handle_auth()
-            if auth_verdict and self.command == "POST":
+            if self.command == "POST":
                 if self.path.endswith(".git"):
                     self.maybe_create_repo()
                 else:
                     msg = "Non-git POST only allowed when creating new repos"
                     self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, msg)
                 return False
-            return auth_verdict
+            return True
 
+        # This is a CGI request meant for git-http-backend, but is the path
+        # valid? If so, populate self.git_env so interested do_* methods know.
         result = {}
         try:
             result = determine_env_vars(
@@ -810,10 +806,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             )
         except Exception:
             self.log_exception("E: Problem parsing path")
-            self.send_error(
-                HTTPStatus.INTERNAL_SERVER_ERROR, "Problem parsing path"
-            )
-            # Bail out of session
+            msg = HTTPStatus.INTERNAL_SERVER_ERROR, "Problem parsing path"
+            self.send_error(*msg)
             return False
 
         config["DEBUG"] and self.dlog("determine_env_vars()", **result)
@@ -825,8 +819,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         else:
             self.git_env = MappingProxyType(result)
 
-        # TODO use git_env in auth
-        return self.handle_auth()
+        return True
 
     def _populate_envvars(self):
         """Return CGI-related env vars
