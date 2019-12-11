@@ -281,14 +281,37 @@ def find_git_root(docroot, uri):
     return "/".join(out)
 
 
+def _find_namespaces(env, config):
+    """Update env dict with namespace info"""
+    parts = iter(env["PATH_INFO"].split("/"))
+    ns = []
+    for part in parts:
+        if not part:
+            continue
+        if (
+            (config.get("ENFORCE_DOTGIT") and part.endswith(".git"))
+            or is_repo(os.path.join(env["GIT_PROJECT_ROOT"], part))
+        ):
+            break
+        ns.append(part)
+    parts = list(parts)
+    if ns:
+        assert all(parts), locals()
+        env["GIT_NAMESPACE"] = "/".join(ns)
+    env["PATH_INFO"] = "/".join(["", part] + parts)
+
+
 def determine_env_vars(docroot, verb, uri, **config):
     """Return dict of env vars needed by git-http-backend"""
-    assert not docroot.endswith("/")
+    assert docroot.startswith("/") and not docroot.endswith("/")
     gitroot = find_git_root(docroot, uri)
     assert not gitroot.startswith("/")
     assert uri.lstrip("/").startswith(gitroot), locals()
     env = {}
-    env["GIT_PROJECT_ROOT"] = "/".join((docroot, gitroot))
+    env["GIT_PROJECT_ROOT"] = (
+        os.path.join(docroot, gitroot) if gitroot else docroot
+    )
+    assert not env["GIT_PROJECT_ROOT"].endswith("/"), locals()
 
     path, maybe_qmark, query = uri.partition("?")
     if verb == "GET":
@@ -305,31 +328,18 @@ def determine_env_vars(docroot, verb, uri, **config):
     if config.get("ENFORCE_DOTGIT") is not False:  # None is True
         assert repo.endswith(".git")
 
-    if gitroot:
-        env["PATH_INFO"] = path.replace("/%s" % gitroot, "", 1)
-    assert env["PATH_INFO"][1] != "/", locals()
+    env["PATH_INFO"] = path.replace("/" + gitroot, "", 1) if gitroot else path
+
     if config.get("USE_NAMESPACES") is True:
-        parts = iter(env["PATH_INFO"].split("/"))
-        ns = []
-        for part in parts:
-            if not part:
-                continue
-            if (
-                (config.get("ENFORCE_DOTGIT") and part.endswith(".git"))
-                or is_repo(os.path.join(env["GIT_PROJECT_ROOT"], part))
-            ):
-                break
-            ns.append(part)
-        parts = list(parts)
-        if ns:
-            assert all(parts), locals()
-            env["GIT_NAMESPACE"] = "/".join(ns)
-        env["PATH_INFO"] = "/".join(["", part] + parts)
+        _find_namespaces(env, config)
 
     env["PATH_TRANSLATED"] = "/".join(
         (env["GIT_PROJECT_ROOT"], env["PATH_INFO"].lstrip("/"))
     )
-    if env["PATH_TRANSLATED"].endswith("/info/refs"):
+    if any(
+        env["PATH_TRANSLATED"].endswith(s)
+        for s in ("/info/refs", "/git-upload-pack", "/git-receive-pack")
+    ):
         assert os.path.exists(os.path.dirname(env["PATH_TRANSLATED"]))
     else:
         assert os.path.exists(env["PATH_TRANSLATED"]), locals()
@@ -876,6 +886,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         """
         rv = super(HTTPBackendHandler, self).parse_request()
         self._original_path = self.path
+        self._original_docroot = self.docroot
 
         if rv is not True:
             return rv
@@ -1083,7 +1094,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             result = {}
             try:
                 result = determine_env_vars(
-                    self.docroot, verb=self.command,
+                    self._original_docroot, verb=self.command,
                     uri=self._original_path, **config
                 )
             except Exception:
