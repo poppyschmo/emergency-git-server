@@ -315,16 +315,17 @@ def server(request, tmpdir_factory):
         s.proc.kill()
 
 
+# XXX param ``first`` used to mean option _FIRST_CHILD_OK, which has been
+# retired. It now signifies a "git root" of at least 1 path component.
+
+
 @pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 @pytest.mark.parametrize("create", [False, True], ids=["__", "create"])
-@pytest.mark.parametrize("first", [False, True], ids=["__", "first"])
 @pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
-def test_basic_errors(server, testdir, create, first, ssl):
+def test_basic_errors(server, testdir, create, ssl):
     # XXX no response may be sent after exception
     # TODO find out when this happens, fix; should always send something
     env = {}
-    if first:
-        env.update({"_FIRST_CHILD_OK": "1"})
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
@@ -347,14 +348,11 @@ def test_basic_errors(server, testdir, create, first, ssl):
     twofer("git config -l")
     pe.sendline("git push -u origin master")
     if create:
-        twofer("fatal")  # trips before first child warning
+        twofer("fatal")
         server.consume_log(["*GET*403*", "*_CREATE_MISSING*"])
-    elif first:
+    else:
         twofer("up-to-date")
         server.consume_log("*GET /test_basic_errors*200*")
-    else:
-        twofer(r"fatal")
-        server.consume_log(["*WARNING*", "*first child*"])
 
     # OK
     if create:
@@ -388,8 +386,6 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     env = {}
     if create:
         env.update(_CREATE_MISSING="1")
-    if first:
-        env.update(_FIRST_CHILD_OK="1")
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
@@ -529,8 +525,6 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     env = {"_USE_NAMESPACES": "1"}
     if create:
         env.update(_CREATE_MISSING="1")
-    if first:
-        env.update(_FIRST_CHILD_OK="1")
     if auth:
         env.update(_AUTHFILE=server.authfile.strpath)
     if ssl:

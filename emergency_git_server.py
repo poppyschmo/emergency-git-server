@@ -47,12 +47,6 @@ r"""Usage::
 
             Note: HEAD is currently left unset.
 
-        _FIRST_CHILD_OK
-            Override the level-2+ depth requirement noted above, i.e.,
-            allow first-child repos; the requirement itself is a legacy
-            holdover from the cgi-bin days and will probably be removed
-            or enabled by default if this script ever gets a makeover
-
         _USE_NAMESPACES
             Interpret non-existent path components between DOCROOT/real
             and the target repo (exclusive) as $GIT_NAMESPACE, e.g.,
@@ -195,7 +189,6 @@ two environment variables::
 # official IANA RFC when revising.
 # TODO clarify path-translation behavior via unit tests, then decouple
 # TODO feature: offer command-line options in addition to environment variables
-# TODO feature: have FIRST_CHILD_OK be on by default
 
 from __future__ import print_function
 from __future__ import unicode_literals
@@ -415,7 +408,7 @@ class CtxServer(HTTPServer, object):
             self.service_actions()
 
 
-class HTTPBackendHandler(CGIHTTPRequestHandler, object):
+class HTTPBackendHandler(CGIHTTPRequestHandler):
     """The included CGI handler from the standard library needs a bit of
     massaging to play nice with git-http-backend(1). See the main module's
     __doc__ for details.
@@ -547,9 +540,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if os.path.exists(cgi_cand):
             return False
         #
-        # Enforce a "CGI-bin present" policy to allow for easier integration of
-        # external authorization facilities.  Permissions problems may arise if
-        # overridden, i.e., if ``FIRST_CHILD_OK == True``.
         if git_root == "/":
             # This should only run if all components have yet to be created or
             # if the topmost (1st child) is an existing repo.
@@ -569,12 +559,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 elif ('/info/refs?service=' in tail and '/' not
                         in tail.split("/info/refs?service=")[0].lstrip("/")):
                     # A lone, first-child of docroot has been requested
-                    if FIRST_CHILD_OK is True:
-                        # Let ``CREATE_MISSING`` logic below christen it a repo
-                        mutate_path = True
-                    else:
-                        msg = "CREATE_MISSING is set but path is only one" \
-                            " level deep; set _FIRST_CHILD_OK to override"
+                    mutate_path = True
                 else:
                     # Multiple components wanted, so this can fall through.
                     #
@@ -582,17 +567,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                     # ``service`` query string or that the method is ``GET``.
                     pass
             else:
-                # First component indeed exists and is a git repo
-                if FIRST_CHILD_OK:
-                    mutate_path = True
-                else:
-                    msg = """\n
-                    =============== WARNING ===============
-                    The requested Git repo should not be a
-                    first child of the root URI, "/"; to
-                    override, export "_FIRST_CHILD_OK=1";
-                    see usage; hit Ctrl-C (SIGINT) to exit
-                    """
+                mutate_path = True
             DEBUG and self.dlog("git_root missing",
                                 gr_test=gr_test,
                                 tail=tail,
@@ -1092,7 +1067,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             config = {
                 "ENFORCE_DOTGIT": ENFORCE_DOTGIT,
                 "CREATE_MISSING": CREATE_MISSING,
-                "FIRST_CHILD_OK": FIRST_CHILD_OK,
                 "USE_NAMESPACES": USE_NAMESPACES
             }
             result = {}
@@ -1326,7 +1300,7 @@ def main(**overrides):
     _DEBUG="1".
     """
     global DOCROOT, HOST, PORT, LOGFILE, AUTHFILE, DEBUG, ENFORCE_DOTGIT, \
-        CREATE_MISSING, FIRST_CHILD_OK, USE_NAMESPACES, REQURE_ACCOUNT
+        CREATE_MISSING, USE_NAMESPACES, REQURE_ACCOUNT
 
     if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
         print("WARNING: untried on Python versions < 3.5, except for 2.7",
@@ -1356,12 +1330,25 @@ def main(**overrides):
     LOGFILE = getvar("LOGFILE")
     AUTHFILE = getvar("AUTHFILE")
     DEBUG = getvar("DEBUG", is_bool=True)
-    ENFORCE_DOTGIT = getvar("ENFORCE_DOTGIT", is_bool=True)
     CREATE_MISSING = getvar("CREATE_MISSING", is_bool=True)
-    FIRST_CHILD_OK = getvar("FIRST_CHILD_OK", is_bool=True)
     USE_NAMESPACES = getvar("USE_NAMESPACES", is_bool=True)
     REQURE_ACCOUNT = getvar("REQURE_ACCOUNT", is_bool=True)
 
+    # Deprecations
+    ENFORCE_DOTGIT = True
+    # CREATE_MISSING = False
+
+    dep_msg = "\x1b[33;1mWARNING\x1b[m: Option {} is no longer supported."
+    for opt in ("ENFORCE_DOTGIT", "FIRST_CHILD_OK", "CREATE_MISSING"):
+        name = "{}{}".format(envvar_prefix, opt)
+        if name in os.environ:
+            if opt == "CREATE_MISSING":
+                msg = "See --help under ALLOW_CREATION."
+            else:
+                msg = "The old 'on' behavior is now hard-coded."
+            print(dep_msg.format(opt), msg)
+
+    # SSL
     context = set_ssl_context(certfile=getvar("CERTFILE"),
                               keyfile=getvar("KEYFILE"),
                               dhparams=getvar("DHPARAMS"))
