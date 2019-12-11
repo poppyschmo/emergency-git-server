@@ -33,10 +33,12 @@ def test_set_ssl_context(tmpdir):
     except ImportError:  # 27
         from mock import patch, Mock
 
-    certfile.write("zDJpxEFgCYcydw==\n"
-                   "-----END PRIVATE KEY-----\n"
-                   "-----BEGIN CERTIFICATE-----\n"
-                   "foo")
+    certfile.write(
+        "zDJpxEFgCYcydw==\n"
+        "-----END PRIVATE KEY-----\n"
+        "-----BEGIN CERTIFICATE-----\n"
+        "foo"
+    )
 
     with patch("ssl.create_default_context") as m_cdc:
         context = Mock()
@@ -47,19 +49,21 @@ def test_set_ssl_context(tmpdir):
         assert set_ssl_context(certfile.strpath, None, dhpfile.strpath)
         context.load_dh_params.assert_called_with(dhpfile.strpath)
 
-    certfile.write("-----BEGIN CERTIFICATE-----\n"
-                   "foo\n"
-                   "-----END CERTIFICATE-----\n")
+    certfile.write(
+        "-----BEGIN CERTIFICATE-----\n" "foo\n" "-----END CERTIFICATE-----\n"
+    )
 
     with pytest.raises(RuntimeError):
         assert set_ssl_context(certfile.strpath, None, None)
 
-    certfile.write("-----BEGIN CERTIFICATE-----\n"
-                   "foo\n"
-                   "-----END CERTIFICATE-----\n"
-                   "-----BEGIN PRIVATE KEY-----\n"
-                   "bar\n"
-                   "-----END PRIVATE KEY-----\n")
+    certfile.write(
+        "-----BEGIN CERTIFICATE-----\n"
+        "foo\n"
+        "-----END CERTIFICATE-----\n"
+        "-----BEGIN PRIVATE KEY-----\n"
+        "bar\n"
+        "-----END PRIVATE KEY-----\n"
+    )
 
     with pytest.raises(RuntimeError):
         assert set_ssl_context(certfile.strpath, None, None)
@@ -68,6 +72,7 @@ def test_set_ssl_context(tmpdir):
 @pytest.fixture
 def safe_debug():
     import emergency_git_server
+
     orig = emergency_git_server.config["DEBUG"]
     try:
         yield
@@ -83,6 +88,7 @@ def test_dlog(safe_debug):
         last = None
         dlog = emergency_git_server.HTTPBackendHandler.dlog
         if is_27:
+
             def __init__(self):
                 self.dlog = Fake.dlog.__get__(self)
 
@@ -104,8 +110,10 @@ def test_dlog(safe_debug):
 
     fake.dlog("bar", spam=spam, something=something)
     from textwrap import dedent
-    assert dedent("""
+
+    src = """
         test_dlog() - bar
           spam:      'abc'
           something: 1
-    """).strip() == fake.last
+    """
+    assert dedent(src).strip() == fake.last

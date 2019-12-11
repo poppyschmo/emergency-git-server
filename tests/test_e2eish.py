@@ -73,7 +73,7 @@ maintainer:qSJwKT4k0OE2o
 contributor:T0NXShw7R7Gfg
 """
 
-bash_prompt = (r"bash.*\$")
+bash_prompt = r"bash.*\$"
 prompt_re = bash_prompt
 
 
@@ -81,6 +81,7 @@ def get_twofer(child, prompt=prompt_re):
     def _twofer(*args, **kwargs):
         child.sendline(*args, **kwargs)
         return child.expect(prompt)
+
     return _twofer
 
 
@@ -112,6 +113,7 @@ def server(request, tmpdir_factory):
     # TOX/TRAVIS need these
     if not misus:
         from _pytest.tmpdir import get_user
+
         misus = get_user()
         missing_envvars.update(USER=misus)
     if is_travis and not misho:
@@ -132,8 +134,9 @@ def server(request, tmpdir_factory):
 
     py_executable = os.getenv("GITSRV_TEST_PYEXE")
     if py_executable:
-        _py_vers = subprocess.check_output([py_executable, "--version"],
-                                           stderr=subprocess.STDOUT)
+        _py_vers = subprocess.check_output(
+            [py_executable, "--version"], stderr=subprocess.STDOUT
+        )
         docroot.join("py_executable.version").write(_py_vers)
     else:
         py_executable = sys.executable
@@ -203,6 +206,7 @@ def server(request, tmpdir_factory):
                     except Failed:
                         return None
                     return True
+
             self.dumb_waiter(inner)
             if truncate:
                 self.truncate_log()
@@ -230,8 +234,9 @@ def server(request, tmpdir_factory):
             cmd = [] if is_travis else [bw_path.strpath]
             cmd += ["git", "clone", "--bare", repo.join(".git").strpath, name]
             try:
-                out = subprocess.check_output(cmd, stderr=subprocess.PIPE,
-                                              cwd=cwd.strpath, env=env)
+                out = subprocess.check_output(
+                    cmd, stderr=subprocess.PIPE, cwd=cwd.strpath, env=env
+                )
             except subprocess.CalledProcessError as exc:
                 out = exc.output
                 err = exc.stderr
@@ -253,8 +258,9 @@ def server(request, tmpdir_factory):
             certstr = self._certfile.strpath
             if self._certfile.exists():
                 try:  # Allow self-signed
-                    subprocess.check_call(["openssl", "verify", "-trusted",
-                                           certstr, certstr])
+                    subprocess.check_call(
+                        ["openssl", "verify", "-trusted", certstr, certstr]
+                    )
                 except subprocess.CalledProcessError:
                     self._certfile.remove()
                 else:
@@ -266,17 +272,30 @@ def server(request, tmpdir_factory):
 
             openssl_cnf = self.cachedir.join("openssl.cnf")
             if not openssl_cnf.exists():
-                cmd = [] if is_travis else [bw_path.strpath, ]
+                cmd = (
+                    [] if is_travis else [bw_path.strpath,]
+                )
                 env.update(BWRAP_NOREPO="1")
                 cmd += ["git", "config", "user.email"]
                 email = subprocess.check_output(cmd, env=env)
                 email = email.strip().decode()
-                openssl_cnf.write(certconf_source.format(path=certstr,
-                                                         email=email))
+                openssl_cnf.write(
+                    certconf_source.format(path=certstr, email=email)
+                )
             # Some sites need -newkey algo to be passed
-            cmdline = ["openssl", "req", "-config", openssl_cnf.strpath,
-                       "-x509", "-days", "1", "-newkey", "rsa",
-                       "-out", certstr]
+            cmdline = [
+                "openssl",
+                "req",
+                "-config",
+                openssl_cnf.strpath,
+                "-x509",
+                "-days",
+                "1",
+                "-newkey",
+                "rsa",
+                "-out",
+                certstr,
+            ]
             subprocess.check_call(cmdline, env=env)
             return True
 
@@ -289,8 +308,8 @@ def server(request, tmpdir_factory):
                 secretsfile.write(secrets_source)
                 pre = ("/org", "")["first" in request._pyfuncitem.name]
                 self._authfile.write(
-                    authconf_source % dict(pre=pre,
-                                           secretsfile=secretsfile.strpath)
+                    authconf_source
+                    % dict(pre=pre, secretsfile=secretsfile.strpath)
                 )
             return self._authfile
 
@@ -360,7 +379,8 @@ def test_basic_errors(server, testdir, create, ssl):
             twofer("curl --insecure --include --data init=1 %s" % url)
         else:
             from textwrap import dedent
-            post_src = dedent("""
+
+            post_src = """
             POST /test_basic_errors.git HTTP/1.1
             Host: localhost:%s
             User-Agent: nc
@@ -369,7 +389,8 @@ def test_basic_errors(server, testdir, create, ssl):
             Content-Type: application/x-www-form-urlencoded
 
             init=1
-            """ % server.port).strip().splitlines()
+            """
+            post_src = dedent(post_src % server.port).strip().splitlines()
             post = testdir.tmpdir / "post"
             post.write("\r\n".join(post_src))
             twofer("nc localhost %s < ./post" % server.port)
@@ -455,9 +476,11 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     pe.sendline("git checkout -b topic")
     pe.expect(".*new branch.*topic")
     pe.expect(prompt_re)
-    pe.sendline("mkdir src && "
-                "echo '#ifndef NUMS_H\n#define NUMS_H\n' > src/nums.h && "
-                "git add -A && git commit -m 'Begin nums'")
+    pe.sendline(
+        "mkdir src && "
+        "echo '#ifndef NUMS_H\n#define NUMS_H\n' > src/nums.h && "
+        "git add -A && git commit -m 'Begin nums'"
+    )
     pe.expect("1 file changed")
     pe.expect(prompt_re)
     pe.sendline("git push -u origin topic")
@@ -476,8 +499,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     # local branch named mymaster (remote ref is LHS)
     twofer("git branch -vr")
     pe.sendline("git fetch origin master:refs/remotes/origin/mymaster")
-    pe.expect(["master *-> *origin/mymaster",
-               "master *-> *origin/master"])
+    pe.expect(["master *-> *origin/mymaster", "master *-> *origin/master"])
     pe.expect(prompt_re)
     twofer("git branch -vr")
 
@@ -493,8 +515,10 @@ def test_simulate_teams(server, testdir, create, first, ssl):
 
     # Rejected fetch
     twofer("cd %s || exit" % ops.strpath)
-    pe.sendline("git fetch origin master:refs/remotes/origin/mymaster \\\n"
-                "topic:refs/remotes/origin/topic")
+    pe.sendline(
+        "git fetch origin master:refs/remotes/origin/mymaster \\\n"
+        "topic:refs/remotes/origin/topic"
+    )
     pe.expect(["rejected", "new branch"])
     pe.expect(prompt_re)
 
@@ -505,8 +529,10 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     pe.sendline("git add -A && git commit -m 'add qa-ci config'")
     pe.expect("1 file changed")
     pe.expect(prompt_re)
-    twofer("git config remote.origin.push "
-           "refs/heads/master:refs/heads/qa/master")
+    twofer(
+        "git config remote.origin.push "
+        "refs/heads/master:refs/heads/qa/master"
+    )
     pe.sendline("git push")
     pe.expect("new branch.*master.*->.*qa/master")
     pe.expect(prompt_re)
@@ -514,10 +540,14 @@ def test_simulate_teams(server, testdir, create, first, ssl):
 
     # Multi-valued fetch entry
     twofer("cd %s || exit" % dev.strpath)
-    twofer("git config remote.origin.fetch "
-           "'+refs/heads/master:refs/remotes/origin/master'")
-    twofer("git config --add remote.origin.fetch "
-           "'+refs/heads/qa/*:refs/remotes/origin/qa/*'")
+    twofer(
+        "git config remote.origin.fetch "
+        "'+refs/heads/master:refs/remotes/origin/master'"
+    )
+    twofer(
+        "git config --add remote.origin.fetch "
+        "'+refs/heads/qa/*:refs/remotes/origin/qa/*'"
+    )
     twofer("git fetch")
     twofer("git show-ref")
     twofer("git log --oneline --decorate --graph --all")
@@ -555,7 +585,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
 
     def await_pass(username, passwd):
         pe.expect("Username.*: ?")  # greedy eats https://
-        pe.sendline(username)       # ~~~~~~~~~~~~~~~~ ^
+        pe.sendline(username)  # ~~~~~~~~~~~~~~~~ ^
         pe.expect("Password.*: ?")
         pe.sendline(passwd)
 
@@ -604,8 +634,11 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
         maintainer_url = "%s/maintainer/test_namespaces.git" % server.url
     else:
         maintainer_url = "%s/org/maintainer/test_namespaces.git" % server.url
-    twofer("git clone -b master -o upstream {} {}".format(project_url,
-                                                          maintainer.strpath))
+    twofer(
+        "git clone -b master -o upstream {} {}".format(
+            project_url, maintainer.strpath
+        )
+    )
     twofer("cd %s || exit 1" % maintainer.strpath)
     twofer("git remote add origin %s" % maintainer_url)
     pe.sendline("git config branch.master.remote")
@@ -638,8 +671,11 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
         contributor_url = "%s/contributor/test_namespaces.git" % server.url
     else:
         contributor_url = "%s/org/contributor/test_namespaces.git" % server.url
-    twofer("git clone -b master -o upstream {} {}".format(maintainer_url,  # <-
-                                                          contributor.strpath))
+    twofer(
+        "git clone -b master -o upstream {} {}".format(
+            maintainer_url, contributor.strpath  # <-
+        )
+    )
     twofer("cd %s || exit 1" % contributor.strpath)
     twofer("git remote add origin %s" % contributor_url)
     pe.sendline("git config branch.master.remote")
@@ -709,9 +745,11 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
 @pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 def test_create_ioset(testdir):
     session_dir = testdir.tmpdir.parts()[-2]
-    subs = (session_dir.join(d).join("data.pickle").realpath() for
-            d in os.listdir(session_dir.strpath)
-            if d.startswith("srv-") and d.endswith("current"))
+    subs = (
+        session_dir.join(d).join("data.pickle").realpath()
+        for d in os.listdir(session_dir.strpath)
+        if d.startswith("srv-") and d.endswith("current")
+    )
     picks = [d for d in subs if d.exists()]
     if not picks:
         return
@@ -719,5 +757,6 @@ def test_create_ioset(testdir):
     assert collected
 
     import json
+
     with testdir.tmpdir.join("collected.json").open("w") as flow:
         json.dump(collected, flow, indent=2)

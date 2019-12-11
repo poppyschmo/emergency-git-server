@@ -9,6 +9,7 @@ _data = {}
 
 def get_path_data():
     import json
+
     if _data:
         return _data
     with open(os.path.join(os.path.dirname(__file__), "paths.json")) as f:
@@ -65,13 +66,13 @@ def test_determine_env_vars(path_data, tmpdir):
     uri = data["path"]
     config = data["config"]
 
-    log = (tmpdir / ("%s.log" % variant))
+    log = tmpdir / ("%s.log" % variant)
     log.write("%s\n" % pformat(data))
 
     if not any(reals):
         with pytest.raises(AssertionError) as exc_info:
             determine_env_vars(docroot, command, uri, **config)
-        errlog = (tmpdir / "exception.log")
+        errlog = tmpdir / "exception.log"
         errlog.write("\n".join(format_exception(*exc_info._excinfo)))
 
         leading = []
