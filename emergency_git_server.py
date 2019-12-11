@@ -643,12 +643,12 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             secdict[u.strip()] = p.strip()
         return secdict
 
-    def handle_auth(self, rv):
-        """ Maybe return rv (bool) unchanged or False
+    def handle_auth(self):
+        """Return True if authorized or False to close connection
 
-        Return rv when (1) authorization doesn't apply to a particular
-        path or (2) credentials check out.  Otherwise, respond with
-        UNAUTHORIZED.
+        Return True when (1) authorization doesn't apply to a particular
+        protection space or (2) credentials check out. Otherwise, respond with
+        UNAUTHORIZED (or more relevant error) and return False.
 
         https://tools.ietf.org/html/rfc7235
         """
@@ -660,10 +660,10 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         self.auth_env.clear()
 
         if not self.auth_dict:
-            return rv
+            return True
         elif not sys.platform.startswith("linux"):
             self.log_error("E: auth options are Linux only")
-            return rv
+            return True
 
         # For GET and HEAD, this should give an fs path on UNIX
         collapsed_path = _url_collapse_path(self.path)
@@ -672,7 +672,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if self.command == "POST":
             # FIXME this is a joke
             self.log_error("E: Auth checks not implemented for POST requests")
-            return rv
+            return True
 
         is_protected = False
         for maybe_restricted_path in self.auth_dict:
@@ -691,7 +691,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             "git-receive-pack"
         ):
             assert collapsed_path.endswith("git-upload-pack"), collapsed_path
-            return rv
+            return True
 
         description = realm_info.get("description", "Basic auth requested")
 
@@ -705,7 +705,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Application error looking up auth",
             )
-            return rv
+            return True
 
         secdict = self.get_passwd_info(secretlines)
 
@@ -750,7 +750,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             config["DEBUG"] and self.dlog("auth", authorization=authorization)
             if verify_pass(secdict[username], password):
                 self.auth_env["REMOTE_USER"] = username
-                return rv
+                return True
 
         self.send_error(HTTPStatus.UNAUTHORIZED, "No permission")
         return False
@@ -774,15 +774,15 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
 
         # Allow SimpleHTTPRequestHandler to attempt fulfilling
         if not is_ghb_bound(self.command, self.path):
-            authd = self.handle_auth(rv)
-            if authd and self.command == "POST":
+            auth_verdict = self.handle_auth()
+            if auth_verdict and self.command == "POST":
                 if self.path.endswith(".git"):
                     self.maybe_create_repo()
                 else:
                     msg = "Non-git POST only allowed when creating new repos"
                     self.send_error(HTTPStatus.METHOD_NOT_ALLOWED, msg)
                 return False
-            return authd
+            return auth_verdict
 
         result = {}
         try:
@@ -815,7 +815,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             self.git_env = MappingProxyType(result)
 
         # TODO use git_env in auth
-        return self.handle_auth(True)
+        return self.handle_auth()
 
     def _populate_envvars(self):
         """Return CGI-related env vars
