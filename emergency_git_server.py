@@ -620,10 +620,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         if not self.auth_dict:
             return True
         elif not sys.platform.startswith("linux"):
-            self.log_error("E: auth options are Linux only")
-            return True
+            raise RuntimeError("Auth options are Linux only")
 
-        # For GET and HEAD, this should give an fs path on UNIX
         collapsed_path = _url_collapse_path(self.path)
 
         # Can't continue without knowing the repo path
@@ -684,14 +682,14 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             authtype, authval = authorization
         except Exception:
             self.send_error(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
+                HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Problem reading authorization",
             )
             return False
 
         if authtype.lower() != "basic":
             msg = "Auth type %r not supported!" % authtype
-            self.send_error(HTTPStatus.NOT_ACCEPTABLE, msg)
+            self.send_error(HTTPStatus.BAD_REQUEST, msg)
             return False
 
         self.auth_env["AUTH_TYPE"] = authtype
