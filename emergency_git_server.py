@@ -283,7 +283,8 @@ def dismember_target(docroot, target):
     ``repoplus``
         means the verified git repository name plus trailing URI components
         before any query; these components may not exist on the file system
-        or even be valid file names
+        or even be valid file names; final trailing slashes are *always*
+        dropped, so "repo.git/x/?foo" becomes "repo.git/x"
 
     Each element may contain multiple path components but won't have any
     leading or trailing slashes. Query, if nonempty, includes the leading
@@ -320,44 +321,43 @@ def determine_env_vars(docroot, verb, target, **config):
     """
     assert docroot.startswith("/") and not docroot.endswith("/")
     gitroot, namespace, repoplus, query = dismember_target(docroot, target)
-    assert not gitroot.startswith("/")
+    assert gitroot.strip("/") == gitroot
     assert target.lstrip("/").startswith(gitroot), locals()
+    assert any(
+        repoplus.endswith(s)
+        for s in ("/info/refs", "/git-upload-pack", "/git-receive-pack")
+    )
+
     env = {}
     env["GIT_PROJECT_ROOT"] = (
         os.path.join(docroot, gitroot) if gitroot else docroot
     )
-    assert not env["GIT_PROJECT_ROOT"].endswith("/"), locals()
 
     if verb == "GET":
         qmark, query = query[0], query[1:]
         assert qmark == "?"
         env["QUERY_STRING"] = query
         assert query in ("service=git-receive-pack", "service=git-upload-pack")
-        repo = repoplus
+        repo = repoplus.split("/")[0]
     else:
         assert verb == "POST"
         env["QUERY_STRING"] = ""
         repo, exename = os.path.split(repoplus)
         assert exename == "git-receive-pack" or exename == "git-upload-pack"
-
-    assert any(c.endswith(".git") for c in repo.split("/")), locals()
+    assert repo.endswith(".git"), locals()
 
     env["PATH_INFO"] = "/".join(("", repoplus))
 
     if config.get("USE_NAMESPACES") is True:
-        if namespace:
+        if namespace:  # leave this as nested block
             env["GIT_NAMESPACE"] = namespace
 
     env["PATH_TRANSLATED"] = "/".join(
         (env["GIT_PROJECT_ROOT"], env["PATH_INFO"].lstrip("/"))
     )
-    if any(
-        env["PATH_TRANSLATED"].endswith(s)
-        for s in ("/info/refs", "/git-upload-pack", "/git-receive-pack")
-    ):
+    if os.path.sep == "/":
         assert os.path.exists(os.path.dirname(env["PATH_TRANSLATED"]))
-    else:
-        assert os.path.exists(env["PATH_TRANSLATED"]), locals()
+
     return env
 
 

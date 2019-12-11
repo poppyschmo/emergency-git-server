@@ -160,7 +160,9 @@ def test_url_collapse_path(vs, query, frag):
 @pytest.mark.parametrize("gitroot", ["", "html", "html/repos"])
 @pytest.mark.parametrize("ns", ["", "foo", "foo/bar"])
 @pytest.mark.parametrize("query", ["", "?service=git-upload-pack"])
-@pytest.mark.parametrize("extra", ["", "/info/refs", "/git-upload-pack"])
+@pytest.mark.parametrize(
+    "extra", ["", "/info/refs", "/git-upload-pack", "/baz/", "/baz/spam/"]
+)
 def test_dismember_target(tmpdir, gitroot, ns, extra, query):
     from emergency_git_server import dismember_target
 
@@ -176,4 +178,4 @@ def test_dismember_target(tmpdir, gitroot, ns, extra, query):
     combined = "/".join(filter(None, [gitroot, ns, repoplus, query]))
     path = "/" + combined
     result = dismember_target(tmpdir.strpath, path)
-    assert result == (gitroot, ns, repoplus, query)
+    assert result == (gitroot, ns, repoplus.rstrip("/"), query)
