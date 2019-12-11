@@ -49,17 +49,11 @@
             "object" with these fields:
             {
               "/some/path/below/docroot": {
-                "description": STR, optional message or realm name
+                "description": STR, optional message for realm challenge
                 "secretsfile": STR, required abs path to .htpasswd-like file
-                "realaccount": BOOL, optional override for _REQURE_ACCOUNT
                 "privaterepo": BOOL, optional; deny public read access
               }, ...
             }
-
-        _REQUIRE_ACCOUNT (not implemented)
-            Enforce a real account policy. Users named in the _AUTHFILE must
-            have an existing account on the server. System permission are
-            checked before access to files are granted.
 
         _CERTFILE <path>
             Path to an x509 cert in PEM format or a combined cert plus RSA
@@ -179,7 +173,6 @@ config = {
     "DEBUG": False,
     "ALLOW_CREATION": True,
     "USE_NAMESPACES": False,
-    "REQUIRE_ACCOUNT": False,
     "CERTFILE": None,
     "KEYFILE": None,
     "DHPARAMS": None,
@@ -653,17 +646,19 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         return secdict
 
     def handle_auth(self, rv):
-        """ Maybe return rv, return False, or raise
+        """ Maybe return rv (bool) unchanged or False
 
         Return rv when (1) authorization doesn't apply to a particular
         path or (2) credentials check out.  Otherwise, respond with
         UNAUTHORIZED.
+
+        https://tools.ietf.org/html/rfc7235
         """
         # NOTE: if messing with path, beware that ``send_head`` will eventually
         # get called for GET and HEAD requests. The base method requires a
         # trailing slash for dirs below DOCROOT, if an html directory listing
-        # is to be generated and returned.  Otherwise, it responds with a 301
-        # MOVED_PERMANENTLY.
+        # (web page) is to be generated and returned. Otherwise, it responds
+        # with a 301 MOVED_PERMANENTLY.
         self.auth_env.clear()
 
         if not self.auth_dict:
@@ -701,12 +696,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             return rv
 
         description = realm_info.get("description", "Basic auth requested")
-        # XXX - this option is currently bunk, although it does trigger the
-        # exporting of REMOTE_USER below, which the git exes seem to ignore.
-        # If implementing, it would most likely be limited to unix systems
-        # with read access to /etc/passwd and /etc/group. The actual modified
-        # files would still end up being owned by the server process UID.
-        realaccount = realm_info.get("realaccount", config["REQUIRE_ACCOUNT"])
+
         try:
             secretsfile = realm_info.get("secretsfile")
             with open(secretsfile) as f:
@@ -722,7 +712,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         secdict = self.get_passwd_info(secretlines)
 
         authorization = self.headers.get("authorization")
-        #
+
+        # Prompt user to supply auth
         if not authorization:
             self.send_response(HTTPStatus.UNAUTHORIZED)
             self.send_header(
@@ -760,19 +751,11 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
         else:
             config["DEBUG"] and self.dlog("auth", authorization=authorization)
             if self.verify_pass(secdict[username], password):
-                if realaccount:
-                    # FIXME use getent, etc. to check against /etc/passwd
-                    raise RuntimeError("Not implemented")
                 self.auth_env["REMOTE_USER"] = username
                 return rv
-            self.send_error(
-                HTTPStatus.UNPROCESSABLE_ENTITY,
-                "Problem reading authorization",
-            )
-            return False
 
         self.send_error(HTTPStatus.UNAUTHORIZED, "No permission")
-        return None
+        return False
 
     def parse_request(self):
         """Populate git_env attr for git requests
