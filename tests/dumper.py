@@ -116,11 +116,11 @@ if __name__ == "__main__":
     import emergency_git_server
 
     data = []
+    orig_parse_request = emergency_git_server.HTTPBackendHandler.parse_request
 
     def parse_request(inst):
         """Manual patch for handler when dumping data. Noisy."""
-        rv = super(emergency_git_server.HTTPBackendHandler,
-                   inst).parse_request()
+        rv = orig_parse_request(inst)
         # print("\n<<<<<<<<<<: %r" % inst.raw_requestline, file=sys.stderr)
         inst.dlog("parsed",
                   requestline=inst.requestline,
