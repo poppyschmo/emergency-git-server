@@ -76,7 +76,9 @@ def collect_picks(*picks, include_all=False):
                         transactions.append(entry)
                 entry = {}  # Throw away GETs that didn't trigger action
                 docroot = call["kwargs"]["docroot"]
-                entry.update(command=call["kwargs"]["command"],
+                entry.update(config=call["kwargs"]["config"],
+                             parts=call["kwargs"]["parts"],
+                             command=call["kwargs"]["command"],
                              path=call["kwargs"]["path"].replace("test_", ""))
             elif name == "handle_error":
                 assert tag == "exception"
@@ -109,6 +111,53 @@ def save_as_json(path):
         json.dump(collected, flow)
 
 
+def group_parts_by_existence(docroot, path):
+    """Return continguous subpaths grouped by existence
+
+    Even-numbered groups, starting from zero are real. Query strings are
+    dropped entirely. Two example outcomes where the docroot is
+    ``/docroot``::
+
+        # uri = "/gitroot/repo.git/info/refs"
+        # fs = "/docroot/gitroot/repo.git/info"
+        ["gitroot", "repo.git", "info"], ["refs"]
+
+        # uri = "/gitroot/my_ns/repo.git?service=foo"
+        # fs  = "/docroot/gitroot/repo.git"
+        ["gitroot"], ["my_ns"], ["repo.git"]
+
+        # uri = "/my_ns/repo.git?service=foo"
+        # fs  = "/docroot/repo.git"
+        [], ["my_ns"], ["repo.git"]
+
+    """
+    from pathlib import Path  # 3.x
+
+    path, *_ = path.split("?")
+    trunk = Path(docroot).resolve(True)
+    parts = iter(Path(path.strip("/")).parts)
+    out = []
+    current = []
+
+    for p in parts:
+        is_real = (trunk / p).exists()
+        is_fake = not is_real
+        is_odd = bool(len(out) % 2)
+        is_even = not is_odd
+
+        if is_real:
+            trunk /= p
+
+        if (is_odd and is_real) or (is_even and is_fake):
+            out.append(tuple(current))
+            current = [p]
+            continue
+        current.append(p)
+
+    out.append(tuple(current))
+    return tuple(out)
+
+
 if __name__ == "__main__":
     import os
     import sys
@@ -122,7 +171,16 @@ if __name__ == "__main__":
         """Manual patch for handler when dumping data. Noisy."""
         rv = orig_parse_request(inst)
         # print("\n<<<<<<<<<<: %r" % inst.raw_requestline, file=sys.stderr)
+        assert emergency_git_server.ENFORCE_DOTGIT is False
+        assert emergency_git_server.REQURE_ACCOUNT is False
+        config = {
+            "CREATE_MISSING": emergency_git_server.CREATE_MISSING,
+            "FIRST_CHILD_OK": emergency_git_server.FIRST_CHILD_OK,
+            "USE_NAMESPACES": emergency_git_server.USE_NAMESPACES,
+        }
         inst.dlog("parsed",
+                  parts=group_parts_by_existence(inst.docroot, inst.path),
+                  config=config,
                   requestline=inst.requestline,
                   version=inst.request_version,
                   docroot=inst.docroot,
