@@ -364,6 +364,7 @@ def verify_pass(saved, received):
         binpass = base64.b64decode(binpass)
         if hashlib.sha1(received.encode()).digest() == binpass:
             return True
+    # TODO maybe accept $2b METHOD_BLOWFISH
     elif len(saved) == 13:
         import crypt
 
@@ -445,10 +446,7 @@ class TlsServer(HTTPServer, object):
 
 
 class HTTPBackendHandler(CGIHTTPRequestHandler, object):
-    """The included CGI handler from the standard library needs a bit of
-    massaging to play nice with git-http-backend(1). See the main module's
-    __doc__ for details.
-    """
+    """A CGI handler for git-http-backend"""
 
     docroot = None
     auth_dict = None
@@ -616,11 +614,8 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             return True
         return False
 
-    def get_passwd_info(self, lines):
-        """Return dict of user/password k/v pairs
-
-        ``lines`` are lines from an auth file.
-        """
+    def _get_htpasswd_info(self, lines):
+        """Given .htpasswd lines, return dict of user/pass k/v pairs"""
         secdict = {}
         for line in lines:
             if ":" not in line:
@@ -636,8 +631,7 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
                 else:
                     self.has_openssl = True
             elif p.startswith("$2y"):
-                # FIXME Python has builtin support for this
-                msg = "bcrypt support requested but not found."
+                msg = "E: bcrypt support requested but not found"
                 self.log_error(msg)
                 raise RuntimeError(msg)
             secdict[u.strip()] = p.strip()
@@ -699,15 +693,14 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             secretsfile = realm_info.get("secretsfile")
             with open(secretsfile) as f:
                 secretlines = f.readlines()
-        except TypeError:
+            secdict = self._get_htpasswd_info(secretlines)
+        except Exception:
             # Could not read .htpasswd file
             self.send_error(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "Application error looking up auth",
             )
             return True
-
-        secdict = self.get_passwd_info(secretlines)
 
         authorization = self.headers.get("authorization")
 
