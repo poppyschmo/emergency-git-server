@@ -196,12 +196,12 @@ if __name__ == "__main__":
 
     # Hard KILL signal from pexpect means atexit doesn't run, so this
     def server_close(inst):
-        super(emergency_git_server.CtxServer, inst).server_close()
+        super(emergency_git_server.TlsServer, inst).server_close()
         with open(pickfile, "wb") as flow:
             pickle.dump(data, flow)
 
     def handle_error(inst, *a, **kw):
-        super(emergency_git_server.CtxServer, inst).handle_error(*a, **kw)
+        super(emergency_git_server.TlsServer, inst).handle_error(*a, **kw)
         typ, val, __ = sys.exc_info()
         inst.RequestHandlerClass.dlog(None, "exception",
                                       name=typ.__name__,
@@ -219,6 +219,6 @@ if __name__ == "__main__":
 
     emergency_git_server.HTTPBackendHandler.dlog = dpick
     emergency_git_server.HTTPBackendHandler.parse_request = parse_request
-    emergency_git_server.CtxServer.server_close = server_close
-    emergency_git_server.CtxServer.handle_error = handle_error
+    emergency_git_server.TlsServer.server_close = server_close
+    emergency_git_server.TlsServer.handle_error = handle_error
     sys.exit(emergency_git_server.main(DEBUG=True))

@@ -350,8 +350,7 @@ def create_repo_from_uri(abspath):
     return check_output(("git", "-C", abspath, "init", "--bare"))
 
 
-# FIXME rename this to SslServer
-class CtxServer(HTTPServer, object):
+class TlsServer(HTTPServer, object):
     """SSL-aware HTTPServer.
 
     This uses standard per-request wrapping rather than wrapping the
@@ -370,7 +369,7 @@ class CtxServer(HTTPServer, object):
 
     def __init__(self, server_address, RequestHandlerClass, context=None):
         self.ssl_context = context
-        super(CtxServer, self).__init__(
+        super(TlsServer, self).__init__(
             server_address, RequestHandlerClass, bind_and_activate=True
         )
 
@@ -1238,10 +1237,10 @@ def main(**overrides):
     logfile = validate_logpath(config["LOGFILE"], create=True, maxsize=0)
 
     if logfile is None:
-        serve(CtxServer, context=context)
+        serve(TlsServer, context=context)
         return
 
-    class AsRequested(CtxServer):  # Really need whole other cls here?
+    class AsRequested(TlsServer):  # Really need whole other cls here?
         def service_actions(self):
             sys.stderr.flush()
             sys.stdout.flush()
