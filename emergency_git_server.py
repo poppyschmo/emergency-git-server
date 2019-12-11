@@ -142,7 +142,6 @@ from __future__ import division
 from __future__ import absolute_import
 
 import os
-import re
 import sys
 import json
 import select
@@ -453,10 +452,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
     git_exec_path = None
     has_openssl = None
     cipher = None
-    get_objects_re = re.compile(
-        r"^/.+/objects/"
-        r"(pack/pack-[0-9a-f]{40}\.(pack|idx)|[0-9a-f]{2}/[0-9a-f]{38})$"
-    )
 
     def __init__(self, *args, **kwargs):
         self.docroot = config["DOCROOT"]
@@ -762,10 +757,6 @@ class HTTPBackendHandler(CGIHTTPRequestHandler, object):
             )
             # Bail out of session
             return False
-
-        # FIXME impossible, delete this
-        if self.command == "GET":
-            assert not self.get_objects_re.match(result["PATH_INFO"])
 
         config["DEBUG"] and self.dlog("determine_env_vars()", **result)
 
