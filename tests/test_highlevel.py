@@ -91,8 +91,8 @@ def server(request, tmpdir_factory):
     from time import sleep
 
     name = request._pyfuncitem.name.replace("[", ".").strip("]")
-    name = "srv-{}".format(name)
-    docroot = tmpdir_factory.mktemp(name, numbered=True)
+    tmphome = tmpdir_factory.mktemp("home-{}".format(name), numbered=True)
+    docroot = tmpdir_factory.mktemp("srv-{}".format(name), numbered=True)
     docroot.chdir()
     cachedir = request.config.cache.makedir("gitsrv")
     bw_path = docroot.join("bw.sh")
@@ -114,7 +114,7 @@ def server(request, tmpdir_factory):
         from _pytest.tmpdir import get_user
         misus = get_user()
         missing_envvars.update(USER=misus)
-    if not misho:
+    if is_travis and not misho:
         misho = "/home/%s" % misus
         missing_envvars.update(HOME=misho)
     if not miste:
@@ -126,6 +126,9 @@ def server(request, tmpdir_factory):
         else:
             raise RuntimeError("HOSTNAME required in environment")
         missing_envvars.update(HOSTNAME=mishn)
+    # Use fake HOME for bwrap
+    if not is_travis:
+        missing_envvars["HOME"] = tmphome.strpath
 
     py_executable = os.getenv("GITSRV_TEST_PYEXE")
     if py_executable:
@@ -144,6 +147,7 @@ def server(request, tmpdir_factory):
         def __init__(self):
             self.missing_envvars = missing_envvars
             self.rootdir = request.config.rootdir
+            self.tmphome = tmphome
             self.docroot = docroot
             self.cachedir = cachedir
             self.logfile = docroot.join("server.log")
@@ -262,11 +266,13 @@ def server(request, tmpdir_factory):
 
             openssl_cnf = self.cachedir.join("openssl.cnf")
             if not openssl_cnf.exists():
-                email = subprocess.check_output(
-                    ["git", "config", "user.email"], env=env
-                )
+                cmd = [] if is_travis else [bw_path.strpath, ]
+                env.update(BWRAP_NOREPO="1")
+                cmd += ["git", "config", "user.email"]
+                email = subprocess.check_output(cmd, env=env)
+                email = email.strip().decode()
                 openssl_cnf.write(certconf_source.format(path=certstr,
-                                                         email=email.decode()))
+                                                         email=email))
             # Some sites need -newkey algo to be passed
             cmdline = ["openssl", "req", "-config", openssl_cnf.strpath,
                        "-x509", "-days", "1", "-newkey", "rsa",
@@ -291,16 +297,17 @@ def server(request, tmpdir_factory):
         @property
         def pe_child_cmd(self):  # doesn't belong here but whatever
             if is_travis:
-                assert self.missing_envvars
-                cmd = ("env -i - USER={USER} HOME={HOME} TERM={TERM} "
-                       "HOSTNAME={HOSTNAME} bash --noprofile --norc -i")
-                env = os.environ.copy()
-                env.update(self.missing_envvars)
-                return cmd.format(**env)
+                return "bash --noprofile --norc -i"
             else:
-                cmd = "bash {} {}"
-                return cmd.format(bw_path.strpath,
-                                  request.config.rootdir.strpath)
+                return "bash {} {}".format(
+                    bw_path.strpath, request.config.rootdir.strpath
+                )
+
+        def spawn_client(self, td):
+            # Use self.tmphome instead of pytest's USERPROFILE
+            if self.missing_envvars:
+                td._env_run_update.update(self.missing_envvars)
+            return td.spawn(self.pe_child_cmd)
 
     s = Server()
     yield s
@@ -322,7 +329,7 @@ def test_basic_errors(server, testdir, create, first, ssl):
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
     server.consume_log(["*Started serving*"])
-    pe = testdir.spawn(server.pe_child_cmd)
+    pe = server.spawn_client(testdir)
     pe.expect(prompt_re)
     twofer = get_twofer(pe)
     if ssl:
@@ -388,7 +395,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     server.start(**env)
     server.consume_log(["*Started serving*"])
 
-    pe = testdir.spawn(server.pe_child_cmd)
+    pe = server.spawn_client(testdir)
     twofer = get_twofer(pe)
 
     pe.expect(prompt_re)
@@ -532,7 +539,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
     server.start(**env)
     server.consume_log(["*Started serving*"])
 
-    pe = testdir.spawn(server.pe_child_cmd)
+    pe = server.spawn_client(testdir)
     twofer = get_twofer(pe)
     pe.expect(bash_prompt)
 

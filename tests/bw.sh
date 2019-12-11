@@ -8,11 +8,13 @@ if [[ ! $BWRAP_NOREPO ]] ; then
     shift
 fi
 
+declare -x BWRAPPED=1
+
 [[ $USER ]] || { USER=$(id -un); export USER; }
 [[ $HOSTNAME ]] || { HOSTNAME=$(hostname -f); export HOSTNAME; }
 if [[ ! $HOME ]]; then
     HOME=/home/$USER
-    if [[ ! $HOME ]]; then
+    if [[ ! -d $HOME ]]; then
         exit 2
     fi
     export HOME
@@ -73,6 +75,7 @@ fi
         --symlink /usr/lib64 /lib64 \
         --symlink /usr/bin /bin \
         --symlink /usr/sbin /sbin \
+        --args 14 \
         --dir "$HOME" \
         --dir "$HOME/.config/git" \
         --file 9 "$HOME/.config/git/ignore" \
@@ -81,13 +84,13 @@ fi
         --hostname "$HOSTNAME" \
         --share-net \
         --dir "/run/user/${UID:-$(id -u)}" \
+        --setenv XDG_CONFIG_HOME "$HOME/.config" \
         --setenv XDG_RUNTIME_DIR "/run/user/${UID:-$(id -u)}" \
         --setenv GIT_PAGER "$(command -v cat)" \
         --die-with-parent \
         --file 11 /etc/passwd \
         --file 12 /etc/group \
-        --file 13 "/$HOME/.curlrc" \
-        --args 14 \
+        --file 13 "$HOME/.curlrc" \
         "${CMD[@]}") \
     9< <(printf '%s\n' "$gitignore") \
     10< <(printf '%s\n' "$gitconfig") \
