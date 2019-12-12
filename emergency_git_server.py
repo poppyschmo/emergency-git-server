@@ -73,9 +73,9 @@ Notes
 -----
 
 This is a minimal, synchronous Git HTTP server for quick chores, local
-experiments, and Git tutorials. Deployment on the open web should not be
-attempted, not even behind a reverse proxy. Opt instead for a pro-quality
-"app," many of which are only a ``docker-run`` away.
+experiments, and Git tutorials. Production use should not be attempted, even
+even when isolated from the open web. Opt instead for a pro-quality "app,"
+many of which are only a ``docker-run`` away.
 
 """
 # Author: Jane Soko
@@ -88,7 +88,7 @@ attempted, not even behind a reverse proxy. Opt instead for a pro-quality
 #
 # TODO simplify auth handling and follow web standards
 #
-# TODO Properly apply HTTPStatus as per the RFC
+# TODO Respond with proper HTTPStatus codes as per the RFC
 
 from __future__ import print_function
 from __future__ import unicode_literals
@@ -111,7 +111,7 @@ else:
     from http import HTTPStatus
     from http.server import CGIHTTPRequestHandler, HTTPServer
 
-__version__ = "0.0.8"
+__version__ = "0.1"
 
 config = {
     "DOCROOT": "/tmp/__fake__",

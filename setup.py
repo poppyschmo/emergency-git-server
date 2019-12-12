@@ -10,12 +10,12 @@ setup(
     name="emergency_git_server",
     author="Jane Soko",
     author_email="boynamedjane@misled.ml",
-    version="0.0.8",
+    version="0.1",
     url="https://github.com/poppyschmo/emergency-git-server",
     description="A minimal Git HTTP server",
     long_description=long_description,
     license="Apache 2.0",
-    keywords="backend development education git http server simple ssl tls",
+    keywords="backend development education git http server simple",
     classifiers=[
         "License :: OSI Approved :: Apache Software License",
         "Development Status :: 3 - Alpha",
@@ -26,6 +26,7 @@ setup(
         "Programming Language :: Python :: 3.5",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
         "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
         "Topic :: Software Development :: Version Control :: Git"
     ],
