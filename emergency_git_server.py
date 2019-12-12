@@ -1004,11 +1004,9 @@ def serve(server_class, ssl_context=None):
     beg_left = left_fmt % beg_time
     #
     print(beg_left, "Started", book_end, file=sys.stderr)
-    print(
-        beg_left,  # is this necessary? resolved docroot may be more useful
-        "PID: %d, PPID: %d" % (os.getpid(), os.getppid()),
-        file=sys.stderr,
-    )
+    print(beg_left, "PID: %d" % os.getpid(), file=sys.stderr)
+    print(beg_left, "CWD: %s" % os.getcwd(), file=sys.stderr)
+
     if not config["LOGFILE"]:
         print("\nHit Ctrl-C to exit.\n", file=sys.stderr)
     sys.stderr.flush()
@@ -1138,10 +1136,10 @@ def _setup_logfile(logfile, ssl_context):
 
 
 def main(**overrides):
-    """Set globals from environment and call serve()
+    """Populate global config dict from environment and run server
 
-    Overrides should be unprefixed names and native types, e.g. DEBUG=1
-    not _DEBUG="1".
+    May print usage or warning and return None. May also raise if prechecks
+    fail. Overrides are optional replacement config items.
 
     """
     if sys.version_info < (3, 5) and sys.version_info[:2] != (2, 7):
@@ -1150,17 +1148,22 @@ def main(**overrides):
             file=sys.stderr,
         )
 
-    if any(a.lstrip("-") in ("help", "h") for a in sys.argv[1:]):
+    if any(a in ("--help", "-h") for a in sys.argv[1:]):
         print(__doc__.split("\x0c")[1])  # long, autouse pager?
         return
 
-    # Real, local path exposed by server as '/'. Full dereferencing with
-    # os.path.realpath() might not be desirable in some situations.
-    config["DOCROOT"] = os.path.abspath(
-        sys.argv[1]
-        if len(sys.argv) > 1 and os.path.isdir(sys.argv[1])
-        else "."
-    )
+    # Document Root
+    try:
+        docroot = overrides.get("DOCROOT") or os.path.abspath(
+            sys.argv[1] if len(sys.argv[1:]) else os.curdir
+        )
+        assert os.path.isdir(docroot) and os.path.exists(docroot)
+        if not os.path.samefile(os.getcwd(), docroot):
+            os.chdir(docroot)
+        config["DOCROOT"] = docroot
+    except Exception:
+        print("Couldn't find docroot. Tried:", docroot, file=sys.stderr)
+        return 1
 
     # Options
     envvar_prefix = os.getenv("GITSRV_PREFIX", "_")
