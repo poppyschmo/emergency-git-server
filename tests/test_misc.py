@@ -206,3 +206,32 @@ def test_register_signals(testdir, request):
     else:
         proc.wait(timeout=1)
     assert proc.returncode == 0
+
+
+def test_validate_logfile(tmpdir):
+    tmpdir.chdir()
+
+    import os
+    import glob
+    from emergency_git_server import validate_logpath
+
+    assert os.path.exists(os.devnull)
+
+    with pytest.raises(RuntimeError):
+        validate_logpath(os.devnull)
+
+    existing = tmpdir / "existing.log"
+    globpat = "existing.log.[0-9]*[0-9]"
+
+    assert not existing.exists()
+
+    validate_logpath("existing.log")
+    assert existing.exists()
+
+    validate_logpath("existing.log")
+    assert existing.exists()
+    assert not glob.glob(globpat)
+
+    existing.write("foo")
+    validate_logpath("existing.log")
+    assert glob.glob(globpat)

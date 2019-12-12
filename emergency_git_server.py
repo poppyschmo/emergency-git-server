@@ -22,7 +22,7 @@
             Port number; defaults to 8000 (may need to be above 1023)
 
         _LOGFILE <path>
-            Redirect all server messages (from standard error) to path;
+            Redirect all server messages (from standard error) to disk;
             <path> need not exist and is truncated at startup
 
         _DEBUG
@@ -1076,31 +1076,28 @@ def set_ssl_context(certfile=None, keyfile=None, dhparams=None):
     return context
 
 
-def validate_logpath(inpath=None, create=False, maxsize=2):
-    import os
+def validate_logpath(path):
+    """Ensure path is a normal disk file with good permissions
 
-    outpath = None
-    if inpath is not None:
-        # On UNIX, write permissions of parent dir don't matter for
-        # existing files
-        if os.path.isfile(inpath) and os.access(inpath, os.W_OK):
-            outpath = inpath
-        elif os.access(os.path.dirname(inpath), os.W_OK):
-            outpath = inpath
-            if os.path.isfile(outpath):
-                outpath += ".new"
-            os.mknod(outpath, 0o644)
-        else:
-            return None
-        # If attempting to support Windows, assume Python version >= 3.5
-        if os.path.getsize(outpath) > 2 ** 20 * maxsize:
-            try:
-                os.truncate(outpath, 0)
-            except AttributeError:
-                # Surely there's some simpler way to do this
-                with open(outpath, "w") as f:
-                    os.ftruncate(f.fileno(), 0)
-    return outpath
+    Raise or return None. Try moving existing nonemptys out of the way but
+    don't raise on failure.
+
+    """
+    if os.path.exists(path):
+        if not (os.path.isfile(path)):
+            raise RuntimeError("Cannot log to non-disk files")
+        try:
+            if os.path.getsize(path):
+                import datetime
+                from shutil import copy
+                ts = datetime.datetime.now().isoformat()
+                copy(path, "%s.%s" % (path, ts))
+        except Exception:
+            pass
+
+    # pathlib.Path.touch
+    with open(path, "w") as f:
+        f.write("")
 
 
 def _boolify_envvar(val):
@@ -1178,15 +1175,15 @@ def main(**overrides):
     if ssl_context and config["PORT"] == 8000:
         config["PORT"] = 4443
 
-    logfile = validate_logpath(config["LOGFILE"], create=True, maxsize=0)
-
-    if logfile is None:
+    if not config["LOGFILE"]:
         serve(TlsServer, ssl_context=ssl_context)
         return
 
+    validate_logpath(config["LOGFILE"])
+
     TlsServer.service_actions = _service_actions
 
-    with open(logfile, "a") as f:
+    with open(config["LOGFILE"], "a") as floa:
         try:
             from contextlib import redirect_stderr, redirect_stdout
         except ImportError:
