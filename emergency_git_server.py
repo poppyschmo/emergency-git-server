@@ -400,8 +400,8 @@ class TlsServer(HTTPServer, object):
        /ssl.html#server-side-operation
     """
 
-    def __init__(self, server_address, RequestHandlerClass, context=None):
-        self.ssl_context = context
+    def __init__(self, server_address, RequestHandlerClass, ssl_context=None):
+        self.ssl_context = ssl_context
         super(TlsServer, self).__init__(
             server_address, RequestHandlerClass, bind_and_activate=True
         )
@@ -971,7 +971,7 @@ def register_signals(server, quitters, keepers=None):
                 res = res[server.socket._closed]
             else:
                 res = res["closedsocket" in repr(server.socket._sock)]
-        print("%s Quitting...%s." % (msg, res), file=sys.stderr)
+        print("%s Quitting... %s." % (msg, res), file=sys.stderr)
         sys.stderr.flush()
         sys.exit(0)
 
@@ -983,42 +983,42 @@ def register_signals(server, quitters, keepers=None):
             signal.signal(num, handle_quit_signal)
 
 
-def serve(server_class, name="Git services", context=None):
-    """This is basically just ``__main__`` from ``http.server``
-    """
+def serve(server_class, ssl_context=None):
+    """This is just __main__ from http.server"""
     from time import strftime
 
+    # TODO maybe use context manager for 3.x
     server = server_class(
-        (config["HOST"], config["PORT"]), HTTPBackendHandler, context
+        (config["HOST"], config["PORT"]), HTTPBackendHandler, ssl_context
     )
 
     register_signals(server, ("TERM", "HUP", "INT"), ("TSTP", "TTOU", "TTIN"))
 
-    # Copy fmt from ``BaseHTTPRequestHandler.log_message``
-    bookend_fmt = "{0} - - [{2}] {3} serving %s on {0} over port {1}" % name
-    time_fmt = "%d/%b/%Y %H:%M:%S"
-    #
     host, port = server.socket.getsockname()
+
+    # Mimic request handler's .log_message
+    left_fmt = "{} - - [%s]".format(host)
+    book_end = "Git HTTP services on port {}".format(port)  # plural?
+    time_fmt = "%d/%b/%Y %H:%M:%S"
+    beg_time = strftime(time_fmt)
+    beg_left = left_fmt % beg_time
+    #
+    print(beg_left, "Started", book_end, file=sys.stderr)
     print(
-        bookend_fmt.format(host, port, strftime(time_fmt), "Started"),
-        file=sys.stderr,
-    )
-    print(
-        "{} - - [{}] PID: {}, PPID: {}".format(
-            host, strftime(time_fmt), os.getpid(), os.getppid()
-        ),
+        beg_left,  # is this necessary? resolved docroot may be more useful
+        "PID: %d, PPID: %d" % (os.getpid(), os.getppid()),
         file=sys.stderr,
     )
     if not config["LOGFILE"]:
-        print("\n{}\n".format("Hit Ctrl-C to exit."), file=sys.stderr)
+        print("\nHit Ctrl-C to exit.\n", file=sys.stderr)
     sys.stderr.flush()
 
     try:
         server.serve_forever()
     finally:
         print(
-            "\n"
-            + bookend_fmt.format(host, port, strftime(time_fmt), "Stopped"),
+            "\n" + left_fmt % strftime(time_fmt),
+            "Stopped", book_end,
             file=sys.stderr,
         )
         server.server_close()
@@ -1164,19 +1164,19 @@ def main(**overrides):
             print(dep_msg.format(opt), msg)
 
     # SSL
-    context = set_ssl_context(
+    ssl_context = set_ssl_context(
         certfile=config["CERTFILE"],
         keyfile=config["KEYFILE"],
         dhparams=config["DHPARAMS"],
     )
 
-    if context and config["PORT"] == 8000:
+    if ssl_context and config["PORT"] == 8000:
         config["PORT"] = 4443
 
     logfile = validate_logpath(config["LOGFILE"], create=True, maxsize=0)
 
     if logfile is None:
-        serve(TlsServer, context=context)
+        serve(TlsServer, ssl_context=ssl_context)
         return
 
     class AsRequested(TlsServer):  # Really need whole other cls here?
@@ -1191,7 +1191,7 @@ def main(**overrides):
             try:
                 _stderr = sys.stderr
                 sys.stderr = f
-                serve(AsRequested, context=context)
+                serve(AsRequested, ssl_context=ssl_context)
             finally:
                 sys.stderr = _stderr
         else:
@@ -1199,7 +1199,7 @@ def main(**overrides):
             # methods like ``SocketServer.BaseServer.handle_error`` don't print
             # to stderr.
             with redirect_stderr(f), redirect_stdout(sys.stderr):
-                serve(AsRequested, context=context)
+                serve(AsRequested, ssl_context=ssl_context)
 
 
 if __name__ == "__main__":

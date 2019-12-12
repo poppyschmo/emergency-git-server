@@ -387,7 +387,7 @@ def test_basic_errors(server, testdir, create, ssl):
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
-    server.consume_log(["*Started serving*"])
+    server.consume_log(["*Started*"])
     pe = server.spawn_client(testdir)
     pe.expect(prompt_re)
     twofer = get_twofer(pe)
@@ -462,7 +462,7 @@ def test_simulate_teams(server, testdir, create, first, ssl):
     if ssl:
         env.update(_CERTFILE=server.certfile.strpath)
     server.start(**env)
-    server.consume_log(["*Started serving*"])
+    server.consume_log(["*Started*"])
 
     pe = server.spawn_client(testdir)
     twofer = get_twofer(pe)
@@ -616,7 +616,7 @@ def test_namespaces(server, testdir, create, first, auth, ssl):
         env.update(_CERTFILE=server.certfile.strpath)
     #
     server.start(**env)
-    server.consume_log(["*Started serving*"])
+    server.consume_log(["*Started*"])
 
     pe = server.spawn_client(testdir)
     twofer = get_twofer(pe)
