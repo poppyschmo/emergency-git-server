@@ -1076,7 +1076,7 @@ def set_ssl_context(certfile=None, keyfile=None, dhparams=None):
     return context
 
 
-def validate_logpath(path):
+def _validate_logpath(path):
     """Ensure path is a normal disk file with good permissions
 
     Raise or return None. Try moving existing nonemptys out of the way but
@@ -1112,6 +1112,29 @@ def _boolify_envvar(val):
 def _service_actions(inst):
     sys.stderr.flush()
     sys.stdout.flush()
+
+
+def _setup_logfile(logfile, ssl_context):
+    _validate_logpath(logfile)
+
+    with open(logfile, "a") as floa:
+        TlsServer.service_actions = _service_actions
+        try:
+            from contextlib import redirect_stderr
+        except ImportError:
+            # Some py27 methods like ``SocketServer.BaseServer.handle_error``
+            # print tracebacks to stdout, but they should be captured
+            try:
+                _stderr, _stdout = sys.stderr, sys.stdout
+                sys.stderr = sys.stdout = floa
+                serve(TlsServer, ssl_context=ssl_context)
+            finally:
+                sys.stderr, sys.stdout = _stderr, _stdout
+        else:
+            with redirect_stderr(floa):
+                serve(TlsServer, ssl_context=ssl_context)
+        finally:
+            del TlsServer.service_actions
 
 
 def main(**overrides):
@@ -1175,29 +1198,11 @@ def main(**overrides):
     if ssl_context and config["PORT"] == 8000:
         config["PORT"] = 4443
 
-    if not config["LOGFILE"]:
-        serve(TlsServer, ssl_context=ssl_context)
+    if config["LOGFILE"]:
+        _setup_logfile(config["LOGFILE"], ssl_context)
         return
 
-    validate_logpath(config["LOGFILE"])
-
-    TlsServer.service_actions = _service_actions
-
-    with open(config["LOGFILE"], "a") as floa:
-        try:
-            from contextlib import redirect_stderr
-        except ImportError:
-            # Some py27 methods like ``SocketServer.BaseServer.handle_error``
-            # print tracebacks to stdout, but they should be captured
-            try:
-                _stderr, _stdout = sys.stderr, sys.stdout
-                sys.stderr = sys.stdout = floa
-                serve(TlsServer, ssl_context=ssl_context)
-            finally:
-                sys.stderr, sys.stdout = _stderr, _stdout
-        else:
-            with redirect_stderr(floa):
-                serve(TlsServer, ssl_context=ssl_context)
+    serve(TlsServer, ssl_context=ssl_context)
 
 
 if __name__ == "__main__":

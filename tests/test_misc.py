@@ -209,44 +209,47 @@ def test_register_signals(testdir, request):
     assert proc.returncode == 0
 
 
-def test_validate_logfile(tmpdir):
+def test__validate_logfile(tmpdir):
     tmpdir.chdir()
 
     import os
     import glob
-    from emergency_git_server import validate_logpath
+    from emergency_git_server import _validate_logpath
 
     assert os.path.exists(os.devnull)
 
     with pytest.raises(RuntimeError):
-        validate_logpath(os.devnull)
+        _validate_logpath(os.devnull)
 
     existing = tmpdir / "existing.log"
     globpat = "existing.log.[0-9]*[0-9]"
 
     assert not existing.exists()
 
-    validate_logpath("existing.log")
+    _validate_logpath("existing.log")
     assert existing.exists()
 
-    validate_logpath("existing.log")
+    _validate_logpath("existing.log")
     assert existing.exists()
     assert not glob.glob(globpat)
 
     existing.write("foo")
-    validate_logpath("existing.log")
+    _validate_logpath("existing.log")
     assert glob.glob(globpat)
 
 
-def test_redirect_logfile(tmpdir, safe_config):
+def test__setup_logfile(tmpdir):
     tmpdir.chdir()
-    from emergency_git_server import main, HTTPBackendHandler, config
+
+    from emergency_git_server import (
+        HTTPBackendHandler, _setup_logfile, TlsServer
+    )
     from functools import partial
 
     logfile = tmpdir / "logfile.log"
-    config["LOGFILE"] = logfile.strpath
 
     def serve(server_class, ssl_context=None):
+        assert "service_actions" in server_class.__dict__
         server = Mock(server_class)
         handler = Mock(HTTPBackendHandler)
         handler.client_address = ("localhost", 8000)
@@ -261,9 +264,10 @@ def test_redirect_logfile(tmpdir, safe_config):
         HTTPBackendHandler.log_message(handler, "%d", 42)
 
     with patch("emergency_git_server.serve", wraps=serve):
-        main()
+        _setup_logfile(logfile.strpath, None)
 
     result = logfile.read()
     assert "RuntimeError" in result
     assert "localhost " in result
     assert "42" in result
+    assert "service_actions" not in TlsServer.__dict__
