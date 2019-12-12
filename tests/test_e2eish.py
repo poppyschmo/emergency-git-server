@@ -341,7 +341,7 @@ def server(request, tmpdir_factory):
 
     missing_envvars = {
         "HOME": tmphome.strpath,
-        "USER": os.getenv("USER") or "gituser",
+        "USER": sys.modules[type(tmpdir_factory).__module__].get_user(),
         "TERM": os.getenv("TERM") or "xterm",
         "HOSTNAME": os.getenv("HOSTNAME", "ci-worker" if is_travis else None),
     }
