@@ -386,18 +386,16 @@ def verify_pass(saved, received):
 class TlsServer(HTTPServer, object):
     """SSL-aware HTTPServer.
 
-    This uses standard per-request wrapping rather than wrapping the
-    bound listen socket as an instance attribute prior to starting the
-    loop. The latter approach actually seems to work just as well, but
-    this mimics the example given in the docs_. Would be nice to get rid
-    of this class, though.
+    This mimics the example given in the docs_.
 
-    BTW, that example also uses ``socket.SHUT_RDWR`` instead of the
-    write-only variant, used here.  But read-write seems to trigger "bad
-    FD" errors during error handling.
+    The only difference is that the default shutdown method relied on here
+    calls ``socket._socket.shutdown()`` with ``socket.SHUT_WR`` instead of
+    ``socket.SHUT_RDWR``, which seems to trigger FD errors during error
+    handling, anyway.
 
     .. _docs: https://docs.python.org/3.6/library
        /ssl.html#server-side-operation
+
     """
 
     def __init__(self, server_address, RequestHandlerClass, ssl_context=None):
@@ -406,53 +404,39 @@ class TlsServer(HTTPServer, object):
             server_address, RequestHandlerClass, bind_and_activate=True
         )
 
-    def _handle_request_noblock(self):
-        """No idea how this really works. See superclass docstring.
-        """
-        try:
-            request, client_address = self.get_request()
-        except OSError:
-            return
-        if self.verify_request(request, client_address):
+    def process_request(self, request, client_address):
+        # The Threading and Forking mixins override this function
+        if self.ssl_context:
             try:
-                if self.ssl_context:
-                    try:
-                        request = self.ssl_context.wrap_socket(
-                            request, server_side=True
-                        )
-                    except Exception as e:
-                        import ssl
+                rapt = self.ssl_context.wrap_socket(request, server_side=True)
+            except Exception as exc:
+                from ssl import SSLError
 
-                        # Usually means client hasn't okay'd self-signed certs
-                        if isinstance(e, ssl.SSLError):
-                            print("%r" % e, file=sys.stderr)
-                            self.shutdown_request(request)
-                            return
-                        else:
-                            raise
-                    else:
-                        if (
-                            config["DEBUG"]
-                            and self.RequestHandlerClass.cipher is None
-                        ):
-                            self.RequestHandlerClass.cipher = request.cipher()
-                self.process_request(request, client_address)
-            except Exception:
-                self.handle_error(request, client_address)
-                self.shutdown_request(request)
-            except:  # noqa: E722
-                self.shutdown_request(request)
+                # May mean client hasn't okay'd self-signed certs
+                if isinstance(exc, SSLError):
+                    self.handle_error(request, client_address)
+                    self.shutdown_request(request)
+                    return
                 raise
-        else:
-            self.shutdown_request(request)
-        #
+            else:
+                request = rapt
+                if (
+                    config["DEBUG"]
+                    and self.RequestHandlerClass.cipher is None
+                ):
+                    self.RequestHandlerClass.cipher = request.cipher()
+        # Assume this runs the BaseServer method, which calls the request
+        # handler and then .shutdown_request()
+        return super(TlsServer, self).process_request(request, client_address)
+
+    if not hasattr(HTTPServer, "service_actions"):
         # XXX workaround for the lack of a ``service_actions()`` hook in 2.7's
         # ``serve_forever`` loop. Unsure how safe this is. Unlike in py3, this
         # doesn't run between selector poll intervals (when fd is busy).
-        if not hasattr(HTTPServer, "service_actions") and hasattr(
-            self, "service_actions"
-        ):
+        def _handle_request_noblock(self):
+            rv = super(TlsServer, self)._handle_request_noblock()
             self.service_actions()
+            return rv
 
 
 class HTTPBackendHandler(CGIHTTPRequestHandler, object):
