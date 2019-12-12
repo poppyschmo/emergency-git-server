@@ -1112,6 +1112,11 @@ def _boolify_envvar(val):
     return (val if val is not None else "false").lower() not in falsey
 
 
+def _service_actions(inst):
+    sys.stderr.flush()
+    sys.stdout.flush()
+
+
 def main(**overrides):
     """Set globals from environment and call serve()
 
@@ -1179,10 +1184,7 @@ def main(**overrides):
         serve(TlsServer, ssl_context=ssl_context)
         return
 
-    class AsRequested(TlsServer):  # Really need whole other cls here?
-        def service_actions(self):
-            sys.stderr.flush()
-            sys.stdout.flush()
+    TlsServer.service_actions = _service_actions
 
     with open(logfile, "a") as f:
         try:
@@ -1191,7 +1193,7 @@ def main(**overrides):
             try:
                 _stderr = sys.stderr
                 sys.stderr = f
-                serve(AsRequested, ssl_context=ssl_context)
+                serve(TlsServer, ssl_context=ssl_context)
             finally:
                 sys.stderr = _stderr
         else:
@@ -1199,7 +1201,7 @@ def main(**overrides):
             # methods like ``SocketServer.BaseServer.handle_error`` don't print
             # to stderr.
             with redirect_stderr(f), redirect_stdout(sys.stderr):
-                serve(AsRequested, ssl_context=ssl_context)
+                serve(TlsServer, ssl_context=ssl_context)
 
 
 if __name__ == "__main__":
