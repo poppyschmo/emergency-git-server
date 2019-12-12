@@ -1185,19 +1185,18 @@ def main(**overrides):
 
     with open(config["LOGFILE"], "a") as floa:
         try:
-            from contextlib import redirect_stderr, redirect_stdout
+            from contextlib import redirect_stderr
         except ImportError:
+            # Some py27 methods like ``SocketServer.BaseServer.handle_error``
+            # print tracebacks to stdout, but they should be captured
             try:
-                _stderr = sys.stderr
-                sys.stderr = f
+                _stderr, _stdout = sys.stderr, sys.stdout
+                sys.stderr = sys.stdout = floa
                 serve(TlsServer, ssl_context=ssl_context)
             finally:
-                sys.stderr = _stderr
+                sys.stderr, sys.stdout = _stderr, _stdout
         else:
-            # Actually, probably shouldn't redirect stdout, but some inherited
-            # methods like ``SocketServer.BaseServer.handle_error`` don't print
-            # to stderr.
-            with redirect_stderr(f), redirect_stdout(sys.stderr):
+            with redirect_stderr(floa):
                 serve(TlsServer, ssl_context=ssl_context)
 
 

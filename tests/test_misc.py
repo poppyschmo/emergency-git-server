@@ -1,6 +1,11 @@
 import pytest
 from conftest import is_27
 
+try:
+    from unittest.mock import patch, Mock
+except ImportError:  # 27
+    from mock import patch, Mock
+
 
 def test_boolify_envvar():
     from emergency_git_server import _boolify_envvar
@@ -28,11 +33,6 @@ def test_set_ssl_context(tmpdir):
     assert set_ssl_context(certfile.strpath, fake, fake) is None
     assert set_ssl_context(certfile.strpath, fake, dhpfile) is None
     assert set_ssl_context(certfile.strpath, keyfile, dhpfile) is None
-
-    try:
-        from unittest.mock import patch, Mock
-    except ImportError:  # 27
-        from mock import patch, Mock
 
     certfile.write(
         "zDJpxEFgCYcydw==\n"
@@ -71,17 +71,18 @@ def test_set_ssl_context(tmpdir):
 
 
 @pytest.fixture
-def safe_debug():
+def safe_config():
     import emergency_git_server
 
-    orig = emergency_git_server.config["DEBUG"]
+    orig = emergency_git_server.config
+    emergency_git_server.config = dict(orig)
     try:
         yield
     finally:
-        emergency_git_server.config["DEBUG"] = orig
+        emergency_git_server.config = orig
 
 
-def test_dlog(safe_debug):
+def test_dlog(safe_config):
     from conftest import is_27
     import emergency_git_server
 
@@ -235,3 +236,34 @@ def test_validate_logfile(tmpdir):
     existing.write("foo")
     validate_logpath("existing.log")
     assert glob.glob(globpat)
+
+
+def test_redirect_logfile(tmpdir, safe_config):
+    tmpdir.chdir()
+    from emergency_git_server import main, HTTPBackendHandler, config
+    from functools import partial
+
+    logfile = tmpdir / "logfile.log"
+    config["LOGFILE"] = logfile.strpath
+
+    def serve(server_class, ssl_context=None):
+        server = Mock(server_class)
+        handler = Mock(HTTPBackendHandler)
+        handler.client_address = ("localhost", 8000)
+        handler.log_date_time_string.return_value = "1/2/3456 13:13:13"
+        handler.address_string = partial(
+            HTTPBackendHandler.address_string, handler
+        )
+        try:
+            raise RuntimeError("Foo")
+        except RuntimeError:
+            server_class.handle_error(server, None, handler.client_address)
+        HTTPBackendHandler.log_message(handler, "%d", 42)
+
+    with patch("emergency_git_server.serve", wraps=serve):
+        main()
+
+    result = logfile.read()
+    assert "RuntimeError" in result
+    assert "localhost " in result
+    assert "42" in result
