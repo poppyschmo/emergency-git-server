@@ -310,7 +310,8 @@ class Server:
     def spawn_client(self, td):
         # Use self.tmphome instead of pytest's USERPROFILE
         if self.missing_envvars:
-            td._env_run_update.update(self.missing_envvars)
+            for k, v in self.missing_envvars.items():
+                td.monkeypatch.setenv(k, v)
         return td.spawn(self.pe_child_cmd)
 
 
