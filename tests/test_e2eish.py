@@ -61,6 +61,7 @@ pytestmark = pytest.mark.skipif(is_27, reason="Python2 must run in subproc")
 bw_script = os.path.join(os.path.dirname(__file__), "bw.sh")
 
 is_travis = os.getenv("TRAVIS")
+is_sub = os.getenv("TOXENV", "fake").endswith("sub")
 
 
 gitignore = "\nspawn.out\n"
@@ -799,3 +800,175 @@ def test_create_ioset(testdir):
     collected = dumper.collect_picks(*picks)
     assert collected
     dumper.save_as_json(testdir.tmpdir.join("collected.json"))
+
+
+pre_receive_hook = r"""
+#!/usr/bin/bash
+
+(( $# )) && { echo expected no args ; exit 1; }
+
+declare -a stdin
+readarray -t -d " " stdin
+declare -p stdin
+for n in $(seq 10); do
+    echo "pre-receive running: $n/10"
+    sleep 1
+done >&2
+date +%s.%N
+"""
+
+
+@pytest.mark.skipif(
+    is_sub or sys.version_info[:2] < (3, 7), reason="Feature missing"
+)
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
+def test_concurrent_separate(server, testdir, ssl):
+    env = {}
+    if ssl:
+        env.update(_CERTFILE=server.certfile.strpath)
+    server.start(**env)
+    server.consume_log(["*Started*"])
+
+    pe = server.spawn_client(testdir)
+    twofer = get_twofer(pe)
+
+    pe.expect(prompt_re)
+    if ssl:
+        twofer("export GIT_SSL_NO_VERIFY=1")
+
+    script = """
+    set -e -x
+    cd {path}
+    git fetch
+    git branch -u origin/master master
+    git add -A
+    git commit -m more
+    git ls-remote
+    {{ pwd; date +%s.%N; }} | tee .started
+    git push
+    {{ pwd; date +%s.%N; }} | tee .finished
+    [[ {name} == two ]] && sleep 1
+    echo "{name} is done"
+    """
+
+    def create(name):
+        upath = "repos/test_concurrent_{}.git".format(name)
+        url = "{}/{}".format(server.url, upath)
+
+        path = testdir.tmpdir.join(name)
+        twofer("mkdir {}".format(name))
+        twofer("cd {}".format(name))
+
+        twofer("echo '# New project' > README.md")
+        twofer("git init")
+        twofer("git add -A && git commit -m 'Init'")
+        twofer("git remote add origin {}".format(url))
+
+        clone_rv = server.clone(path, upath)
+        assert clone_rv == url
+        phook = (server.docroot / upath / "hooks/pre-receive")
+        phook.write(pre_receive_hook)
+        phook.chmod(0o700)
+
+        local_script = script.format(name=name, path=path.strpath)
+        testdir.makefile(".sh", **{"{}/run".format(name): local_script})
+        twofer("cd {}".format(testdir.tmpdir.strpath))
+
+    create("one")
+    create("two")
+
+    pe.sendline("bash one/run.sh & bash two/run.sh")
+    pe.expect(r"refs/heads/master")
+    pe.expect(r"remote: pre-receive running: 10/10", timeout=20)
+    pe.expect(r"two is done")
+    pe.expect(prompt_re)
+
+    beg1 = (testdir.tmpdir / "one/.started").read().strip().splitlines().pop()
+    beg2 = (testdir.tmpdir / "two/.started").read().strip().splitlines().pop()
+    fin1 = (testdir.tmpdir / "one/.finished").read().strip().splitlines().pop()
+    fin2 = (testdir.tmpdir / "two/.finished").read().strip().splitlines().pop()
+
+    diff_beg = abs(float(beg2) - float(beg1))
+    assert 0 < diff_beg < 0.1
+
+    diff_fin = abs(float(fin2) - float(fin1))
+    assert 0 < diff_fin < 0.1
+
+    (testdir.tmpdir / ".diff").write(
+        "beg: {}\nend: {}".format(diff_beg, diff_fin)
+    )
+
+    dur = (float(fin2) + float(fin1))/2 - (float(beg2) + float(beg1))/2
+    assert 8 < dur < 12
+
+
+@pytest.mark.skipif(
+    is_sub or sys.version_info[:2] < (3, 7), reason="Feature missing"
+)
+@pytest.mark.parametrize("ssl", [False, True], ids=["__", "ssl"])
+def test_concurrent_collision(server, testdir, ssl):
+    env = {}
+    if ssl:
+        env.update(_CERTFILE=server.certfile.strpath)
+    server.start(**env)
+    server.consume_log(["*Started*"])
+
+    pe = server.spawn_client(testdir)
+    twofer = get_twofer(pe)
+
+    pe.expect(prompt_re)
+    if ssl:
+        twofer("export GIT_SSL_NO_VERIFY=1")
+
+    script = """
+    set -e -x
+    [[ {name} == two ]] && sleep 0.25
+    cd {path}
+    git add -A
+    git commit -m more
+    git ls-remote
+    {{ pwd; date +%s.%N; }} | tee .started
+    git push
+    {{ pwd; date +%s.%N; }} | tee .finished
+    echo "{name} is done"
+    """
+
+    upath = "repos/test_concurrent.git"
+    url = "{}/{}".format(server.url, upath)
+
+    # Create one
+    path = testdir.tmpdir.join("one")
+    twofer("mkdir one")
+    twofer("cd one")
+
+    twofer("echo '# New project' > README.md")
+    twofer("git init")
+    twofer("git add -A && git commit -m Init")
+    twofer("git remote add origin {}".format(url))
+
+    clone_rv = server.clone(path, upath)
+    assert clone_rv == url
+
+    twofer("git fetch")
+    twofer("git branch -u origin/master master")
+
+    phook = (server.docroot / upath / "hooks/pre-receive")
+    phook.write(pre_receive_hook)
+    phook.chmod(0o700)
+
+    local_script = script.format(name="one", path=path.strpath)
+    testdir.makefile(".sh", **{"one/run": local_script})
+    twofer("cd {}".format(testdir.tmpdir.strpath))
+
+    # Clone two
+    twofer("git clone {} two".format(clone_rv))
+    local_script = script.format(
+        name="two", path=testdir.tmpdir.join("two").strpath
+    )
+    testdir.makefile(".sh", **{"two/run": local_script})
+
+    pe.sendline("bash one/run.sh & bash two/run.sh")
+    pe.expect(r"refs/heads/master")
+    pe.expect(r"one is done", timeout=20)
+    pe.expect(r"error")
+    pe.expect(prompt_re)

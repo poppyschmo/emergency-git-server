@@ -106,10 +106,18 @@ if sys.version_info < (3, 0):
     import httplib as HTTPStatus
     from future_builtins import filter
     from CGIHTTPServer import CGIHTTPRequestHandler
-    from BaseHTTPServer import HTTPServer
+    from BaseHTTPServer import HTTPServer as _HTTPServer
 else:
     from http import HTTPStatus
-    from http.server import CGIHTTPRequestHandler, HTTPServer
+    from http.server import CGIHTTPRequestHandler
+    # When two clients try writing to the same repo, the first to set the index
+    # lockfile wins.  With the threading or forking servers, the second client
+    # will get an immediate error instead of waiting and eventually being
+    # served. Some may find this behavior objectionable.
+    if sys.version_info < (3, 7):
+        from http.server import HTTPServer as _HTTPServer
+    else:
+        from http.server import ThreadingHTTPServer as _HTTPServer
 
 __version__ = "0.1"
 
@@ -383,7 +391,7 @@ def verify_pass(saved, received):
     return False
 
 
-class TlsServer(HTTPServer, object):
+class TlsServer(_HTTPServer, object):
     """SSL-aware HTTPServer.
 
     This mimics the example given in the docs_.
@@ -397,6 +405,7 @@ class TlsServer(HTTPServer, object):
        /ssl.html#server-side-operation
 
     """
+    # ThreadingHTTPServer detaches worker thread, which is what we want
 
     def __init__(self, server_address, RequestHandlerClass, ssl_context=None):
         self.ssl_context = ssl_context
@@ -420,16 +429,11 @@ class TlsServer(HTTPServer, object):
                 raise
             else:
                 request = rapt
-                if (
-                    config["DEBUG"]
-                    and self.RequestHandlerClass.cipher is None
-                ):
-                    self.RequestHandlerClass.cipher = request.cipher()
-        # Assume this runs the BaseServer method, which calls the request
-        # handler and then .shutdown_request()
+        # Assume this runs the BaseServer or ThreadingMixIn methods, which
+        # create a new request handler and then .shutdown_request()
         return super(TlsServer, self).process_request(request, client_address)
 
-    if not hasattr(HTTPServer, "service_actions"):
+    if not hasattr(_HTTPServer, "service_actions"):
         # XXX workaround for the lack of a ``service_actions()`` hook in 2.7's
         # ``serve_forever`` loop. Unsure how safe this is. Unlike in py3, this
         # doesn't run between selector poll intervals (when fd is busy).

@@ -128,12 +128,12 @@ srv_src = r"""
 from __future__ import print_function
 import sys
 from emergency_git_server import (
-    config, register_signals, CGIHTTPRequestHandler, HTTPServer
+    config, register_signals, CGIHTTPRequestHandler, _HTTPServer
 )
 config['DEBUG'] = True
 
 address = ('localhost', 8000)
-server = HTTPServer(address, CGIHTTPRequestHandler)
+server = _HTTPServer(address, CGIHTTPRequestHandler)
 register_signals(server, ("INT", "TERM"), ("TSTP",))
 print('ready', file=sys.stderr)
 sys.stderr.flush()

@@ -14,9 +14,7 @@ non-issues. Requires a normal Git installation. There's really no need to
 ``--help`` for available options.
 
 *Update 2019*
-    This project is now in `maintenance mode`_.
-
-.. _`maintenance mode`: release-notes.rst
+    This project has been retired. PM if you want the PyPI name.
 
 
 Example
